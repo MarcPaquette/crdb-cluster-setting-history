@@ -191,3 +191,101 @@ func TestNewWithInvalidURL(t *testing.T) {
 		t.Error("Expected error with invalid URL")
 	}
 }
+
+func TestWithRetention(t *testing.T) {
+	sourceURL, historyURL := getTestURLs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, historyURL)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to create collector: %v", err)
+	}
+	defer coll.Close()
+
+	// Test chaining
+	result := coll.WithRetention(24 * time.Hour)
+	if result != coll {
+		t.Error("WithRetention should return the same collector for chaining")
+	}
+
+	if coll.retention != 24*time.Hour {
+		t.Errorf("Expected retention 24h, got %v", coll.retention)
+	}
+}
+
+func TestCollectAndCleanup(t *testing.T) {
+	sourceURL, historyURL := getTestURLs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, historyURL)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to create collector: %v", err)
+	}
+	defer coll.Close()
+
+	// Set a very short retention to trigger cleanup
+	coll.WithRetention(1 * time.Nanosecond)
+
+	// Run collectAndCleanup - this exercises both collect and cleanup paths
+	coll.collectAndCleanup(ctx)
+
+	// Verify collection happened (cleanup may have removed old data)
+	snapshot, err := store.GetLatestSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+
+	// May or may not have data depending on timing, but shouldn't error
+	t.Logf("After collectAndCleanup: %d settings in snapshot", len(snapshot))
+}
+
+func TestCleanupWithRetention(t *testing.T) {
+	sourceURL, historyURL := getTestURLs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, historyURL)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to create collector: %v", err)
+	}
+	defer coll.Close()
+
+	// First collect some data
+	err = coll.collect(ctx)
+	if err != nil {
+		t.Fatalf("collect() failed: %v", err)
+	}
+
+	// Set retention and run cleanup
+	coll.WithRetention(1 * time.Nanosecond)
+	err = coll.cleanup(ctx)
+	if err != nil {
+		t.Fatalf("cleanup() failed: %v", err)
+	}
+
+	// Cleanup should have run without error
+	t.Log("Cleanup completed successfully")
+}

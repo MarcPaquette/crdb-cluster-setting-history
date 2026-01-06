@@ -73,7 +73,36 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	CREATE INDEX IF NOT EXISTS idx_changes_detected ON changes(detected_at DESC);
 	`
 	_, err := pool.Exec(ctx, schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migrate existing FK constraint to include ON DELETE CASCADE
+	// Check if the old constraint exists without CASCADE
+	var needsMigration bool
+	err = pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_constraint
+			WHERE conname = 'settings_snapshot_id_fkey'
+			AND confdeltype = 'a'
+		)
+	`).Scan(&needsMigration)
+	if err != nil {
+		return err
+	}
+
+	if needsMigration {
+		_, err = pool.Exec(ctx, "ALTER TABLE settings DROP CONSTRAINT settings_snapshot_id_fkey")
+		if err != nil {
+			return err
+		}
+		_, err = pool.Exec(ctx, "ALTER TABLE settings ADD CONSTRAINT settings_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE")
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) GetLatestSnapshot(ctx context.Context) (map[string]Setting, error) {

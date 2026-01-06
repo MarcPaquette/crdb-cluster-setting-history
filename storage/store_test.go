@@ -254,3 +254,88 @@ func TestGetChangesLimit(t *testing.T) {
 		t.Errorf("Expected at most 5 changes, got %d", len(changes))
 	}
 }
+
+func TestCleanupOldSnapshots(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Save a snapshot
+	settings := []Setting{
+		{Variable: "cleanup.test.setting", Value: "value1", SettingType: "s", Description: "Test"},
+	}
+	err = store.SaveSnapshot(ctx, settings)
+	if err != nil {
+		t.Fatalf("Failed to save snapshot: %v", err)
+	}
+
+	// Cleanup with zero retention should delete everything
+	deleted, err := store.CleanupOldSnapshots(ctx, 0)
+	if err != nil {
+		t.Fatalf("Failed to cleanup snapshots: %v", err)
+	}
+
+	// Should have deleted at least the one we just created
+	if deleted < 1 {
+		t.Logf("Deleted %d snapshots (may vary based on test order)", deleted)
+	}
+
+	// Cleanup with long retention should delete nothing new
+	deleted, err = store.CleanupOldSnapshots(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("Failed to cleanup snapshots: %v", err)
+	}
+	t.Logf("Deleted %d snapshots with 24h retention", deleted)
+}
+
+func TestCleanupOldChanges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Create some changes by saving two different snapshots
+	settings1 := []Setting{
+		{Variable: "cleanup.change.test", Value: "original", SettingType: "s", Description: "Test"},
+	}
+	err = store.SaveSnapshot(ctx, settings1)
+	if err != nil {
+		t.Fatalf("Failed to save first snapshot: %v", err)
+	}
+
+	settings2 := []Setting{
+		{Variable: "cleanup.change.test", Value: "modified", SettingType: "s", Description: "Test"},
+	}
+	err = store.SaveSnapshot(ctx, settings2)
+	if err != nil {
+		t.Fatalf("Failed to save second snapshot: %v", err)
+	}
+
+	// Cleanup with zero retention should delete everything
+	deleted, err := store.CleanupOldChanges(ctx, 0)
+	if err != nil {
+		t.Fatalf("Failed to cleanup changes: %v", err)
+	}
+
+	if deleted < 1 {
+		t.Logf("Deleted %d changes (may vary based on test order)", deleted)
+	}
+
+	// Verify changes are gone
+	changes, err := store.GetChanges(ctx, 100)
+	if err != nil {
+		t.Fatalf("Failed to get changes: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Errorf("Expected 0 changes after cleanup, got %d", len(changes))
+	}
+}

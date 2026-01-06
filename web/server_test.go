@@ -185,3 +185,38 @@ func TestHandleIndexNoChanges(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 }
+
+func TestHandleHealth(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	// Create a test request to /health
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+
+	// Serve the request
+	server.Handler().ServeHTTP(w, req)
+
+	// Check response
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	// Check body contains "ok"
+	body := w.Body.String()
+	if body != "ok" {
+		t.Errorf("Expected body 'ok', got '%s'", body)
+	}
+}
