@@ -3,12 +3,16 @@ package collector
 import (
 	"context"
 	"log"
+	"regexp"
 	"time"
 
 	"crdb-cluster-history/storage"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// versionRegex extracts the version number (e.g., "v25.4.2") from the full version string
+var versionRegex = regexp.MustCompile(`v\d+\.\d+\.\d+`)
 
 type Collector struct {
 	pool      *pgxpool.Pool
@@ -92,10 +96,16 @@ func (c *Collector) cleanup(ctx context.Context) error {
 func (c *Collector) collect(ctx context.Context) error {
 	log.Printf("Collecting cluster settings...")
 
-	// Fetch and store cluster ID (only updates if changed)
+	// Fetch and store cluster ID and version (only updates if changed)
 	if err := c.updateClusterID(ctx); err != nil {
 		log.Printf("Warning: failed to update cluster ID: %v", err)
 	}
+	if err := c.updateDatabaseVersion(ctx); err != nil {
+		log.Printf("Warning: failed to update database version: %v", err)
+	}
+
+	// Get the short version for storing with changes
+	shortVersion := c.getShortVersion(ctx)
 
 	rows, err := c.pool.Query(ctx, "SHOW CLUSTER SETTINGS")
 	if err != nil {
@@ -118,12 +128,26 @@ func (c *Collector) collect(ctx context.Context) error {
 		return err
 	}
 
-	if err := c.store.SaveSnapshot(ctx, settings); err != nil {
+	if err := c.store.SaveSnapshot(ctx, settings, shortVersion); err != nil {
 		return err
 	}
 
 	log.Printf("Collected %d settings", len(settings))
 	return nil
+}
+
+// getShortVersion returns the short version string (e.g., "v25.4.2") from the database
+func (c *Collector) getShortVersion(ctx context.Context) string {
+	var fullVersion string
+	err := c.pool.QueryRow(ctx, "SELECT version()").Scan(&fullVersion)
+	if err != nil {
+		return ""
+	}
+	match := versionRegex.FindString(fullVersion)
+	if match != "" {
+		return match
+	}
+	return fullVersion
 }
 
 func (c *Collector) updateClusterID(ctx context.Context) error {
@@ -133,4 +157,13 @@ func (c *Collector) updateClusterID(ctx context.Context) error {
 		return err
 	}
 	return c.store.SetClusterID(ctx, clusterID)
+}
+
+func (c *Collector) updateDatabaseVersion(ctx context.Context) error {
+	var version string
+	err := c.pool.QueryRow(ctx, "SELECT version()").Scan(&version)
+	if err != nil {
+		return err
+	}
+	return c.store.SetDatabaseVersion(ctx, version)
 }

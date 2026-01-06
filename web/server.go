@@ -63,12 +63,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		// Don't fail, just leave it empty
 	}
 
+	dbVersion, err := s.store.GetDatabaseVersion(ctx)
+	if err != nil {
+		log.Printf("Error getting database version: %v", err)
+		// Don't fail, just leave it empty
+	}
+
 	data := struct {
-		ClusterID string
-		Changes   []storage.Change
+		ClusterID       string
+		DatabaseVersion string
+		Changes         []storage.Change
 	}{
-		ClusterID: clusterID,
-		Changes:   changes,
+		ClusterID:       clusterID,
+		DatabaseVersion: dbVersion,
+		Changes:         changes,
 	}
 
 	if err := s.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {

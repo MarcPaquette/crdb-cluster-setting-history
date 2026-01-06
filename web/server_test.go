@@ -122,7 +122,7 @@ func TestHandleIndexWithChanges(t *testing.T) {
 	settings1 := []storage.Setting{
 		{Variable: "web.test.setting", Value: "original", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1)
+	err = store.SaveSnapshot(ctx, settings1, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestHandleIndexWithChanges(t *testing.T) {
 	settings2 := []storage.Setting{
 		{Variable: "web.test.setting", Value: "modified", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings2)
+	err = store.SaveSnapshot(ctx, settings2, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}

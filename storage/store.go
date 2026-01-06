@@ -21,6 +21,7 @@ type Change struct {
 	OldValue    string
 	NewValue    string
 	Description string
+	Version     string
 }
 
 type Store struct {
@@ -129,6 +130,25 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 
+	// Add version column to changes table if it doesn't exist
+	var hasVersionColumn bool
+	err = pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'changes' AND column_name = 'version'
+		)
+	`).Scan(&hasVersionColumn)
+	if err != nil {
+		return err
+	}
+
+	if !hasVersionColumn {
+		_, err = pool.Exec(ctx, "ALTER TABLE changes ADD COLUMN version TEXT")
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -195,7 +215,7 @@ func (s *Store) getLatestSnapshotTx(ctx context.Context, tx pgx.Tx) (map[string]
 	return settings, rows.Err()
 }
 
-func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting) error {
+func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting, version string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -236,15 +256,15 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting) error {
 		if prev, exists := prevSettings[variable]; exists {
 			if prev.Value != current.Value {
 				batch.Queue(
-					"INSERT INTO changes (detected_at, variable, old_value, new_value, description) VALUES ($1, $2, $3, $4, $5)",
-					now, variable, prev.Value, current.Value, current.Description,
+					"INSERT INTO changes (detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6)",
+					now, variable, prev.Value, current.Value, current.Description, version,
 				)
 			}
 		} else if prevSettings != nil {
 			// New setting (only record if we had previous snapshot)
 			batch.Queue(
-				"INSERT INTO changes (detected_at, variable, old_value, new_value, description) VALUES ($1, $2, $3, $4, $5)",
-				now, variable, nil, current.Value, current.Description,
+				"INSERT INTO changes (detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6)",
+				now, variable, nil, current.Value, current.Description, version,
 			)
 		}
 	}
@@ -254,8 +274,8 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting) error {
 		for variable, prev := range prevSettings {
 			if _, exists := currentSettings[variable]; !exists {
 				batch.Queue(
-					"INSERT INTO changes (detected_at, variable, old_value, new_value, description) VALUES ($1, $2, $3, $4, $5)",
-					now, variable, prev.Value, nil, prev.Description,
+					"INSERT INTO changes (detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6)",
+					now, variable, prev.Value, nil, prev.Description, version,
 				)
 			}
 		}
@@ -272,7 +292,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting) error {
 
 func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
 	rows, err := s.pool.Query(ctx,
-		"SELECT detected_at, variable, old_value, new_value, description FROM changes ORDER BY detected_at DESC LIMIT $1",
+		"SELECT detected_at, variable, old_value, new_value, description, version FROM changes ORDER BY detected_at DESC LIMIT $1",
 		limit,
 	)
 	if err != nil {
@@ -283,8 +303,8 @@ func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
 	var changes []Change
 	for rows.Next() {
 		var c Change
-		var oldValue, newValue, description *string
-		if err := rows.Scan(&c.DetectedAt, &c.Variable, &oldValue, &newValue, &description); err != nil {
+		var oldValue, newValue, description, version *string
+		if err := rows.Scan(&c.DetectedAt, &c.Variable, &oldValue, &newValue, &description, &version); err != nil {
 			return nil, err
 		}
 		if oldValue != nil {
@@ -295,6 +315,9 @@ func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
 		}
 		if description != nil {
 			c.Description = *description
+		}
+		if version != nil {
+			c.Version = *version
 		}
 		changes = append(changes, c)
 	}
@@ -360,4 +383,14 @@ func (s *Store) GetClusterID(ctx context.Context) (string, error) {
 // SetClusterID stores the cluster ID.
 func (s *Store) SetClusterID(ctx context.Context, clusterID string) error {
 	return s.SetMetadata(ctx, "cluster_id", clusterID)
+}
+
+// GetDatabaseVersion retrieves the stored database version.
+func (s *Store) GetDatabaseVersion(ctx context.Context) (string, error) {
+	return s.GetMetadata(ctx, "database_version")
+}
+
+// SetDatabaseVersion stores the database version.
+func (s *Store) SetDatabaseVersion(ctx context.Context, version string) error {
+	return s.SetMetadata(ctx, "database_version", version)
 }

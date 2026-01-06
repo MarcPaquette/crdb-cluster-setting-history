@@ -134,6 +134,7 @@
     <div class="container">
         <h1>CockroachDB Cluster Settings History</h1>
         {{if .ClusterID}}<div class="cluster-id">Cluster ID: {{.ClusterID}}</div>{{end}}
+        {{if .DatabaseVersion}}<div class="cluster-id">Version: {{.DatabaseVersion}}</div>{{end}}
 
         <div class="controls">
             <label>
@@ -147,6 +148,7 @@
                 <tr>
                     <th>Timestamp</th>
                     <th>Setting</th>
+                    <th>Version</th>
                     <th>Old Value</th>
                     <th>New Value</th>
                 </tr>
@@ -156,6 +158,7 @@
                 <tr>
                     <td class="timestamp">{{.DetectedAt.Format "2006-01-02 15:04:05"}}</td>
                     <td class="variable" {{if .Description}}title="{{.Description}}"{{end}}>{{.Variable}}</td>
+                    <td class="value">{{.Version}}</td>
                     <td class="value">
                         {{if .OldValue}}
                         <span class="old-value">{{.OldValue}}</span>

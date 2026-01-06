@@ -56,7 +56,7 @@ func TestSaveAndGetSnapshot(t *testing.T) {
 		{Variable: "test.setting.two", Value: "value2", SettingType: "i", Description: "Test setting 2"},
 	}
 
-	err = store.SaveSnapshot(ctx, settings)
+	err = store.SaveSnapshot(ctx, settings, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save snapshot: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestChangeDetection(t *testing.T) {
 	settings1 := []Setting{
 		{Variable: "change.test.setting", Value: "original", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1)
+	err = store.SaveSnapshot(ctx, settings1, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestChangeDetection(t *testing.T) {
 	settings2 := []Setting{
 		{Variable: "change.test.setting", Value: "modified", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings2)
+	err = store.SaveSnapshot(ctx, settings2, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestNewSettingDetection(t *testing.T) {
 	settings1 := []Setting{
 		{Variable: "existing.setting", Value: "exists", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1)
+	err = store.SaveSnapshot(ctx, settings1, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestNewSettingDetection(t *testing.T) {
 		{Variable: "existing.setting", Value: "exists", SettingType: "s", Description: "Test"},
 		{Variable: uniqueName, Value: "new", SettingType: "s", Description: "New setting"},
 	}
-	err = store.SaveSnapshot(ctx, settings2)
+	err = store.SaveSnapshot(ctx, settings2, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestRemovedSettingDetection(t *testing.T) {
 		{Variable: uniqueName, Value: "will-be-removed", SettingType: "s", Description: "Test"},
 		{Variable: "keeper.setting", Value: "stays", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1)
+	err = store.SaveSnapshot(ctx, settings1, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestRemovedSettingDetection(t *testing.T) {
 	settings2 := []Setting{
 		{Variable: "keeper.setting", Value: "stays", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings2)
+	err = store.SaveSnapshot(ctx, settings2, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestCleanupOldSnapshots(t *testing.T) {
 	settings := []Setting{
 		{Variable: "cleanup.test.setting", Value: "value1", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings)
+	err = store.SaveSnapshot(ctx, settings, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save snapshot: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestCleanupOldChanges(t *testing.T) {
 	settings1 := []Setting{
 		{Variable: "cleanup.change.test", Value: "original", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1)
+	err = store.SaveSnapshot(ctx, settings1, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestCleanupOldChanges(t *testing.T) {
 	settings2 := []Setting{
 		{Variable: "cleanup.change.test", Value: "modified", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings2)
+	err = store.SaveSnapshot(ctx, settings2, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
