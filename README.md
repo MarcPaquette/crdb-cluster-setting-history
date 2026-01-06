@@ -2,6 +2,8 @@
 
 A Go service that periodically collects CockroachDB cluster settings and tracks changes over time via a web interface.
 
+![CockroachDB Cluster Settings History](crdb-cluster-history-preview.png)
+
 ## Features
 
 - Periodically collects `SHOW CLUSTER SETTINGS` from a CockroachDB cluster
