@@ -16,6 +16,9 @@ import (
 	"cluster-history/web"
 )
 
+// Version is set at build time via -ldflags
+var Version = "dev"
+
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -24,6 +27,9 @@ func main() {
 			return
 		case "-h", "--help", "help":
 			usage()
+			return
+		case "-v", "--version", "version":
+			fmt.Printf("cluster-history %s\n", Version)
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
@@ -75,6 +81,7 @@ func runServer() {
 	}
 
 	pollInterval := getEnvDuration("POLL_INTERVAL", 15*time.Minute)
+	retention := getEnvDuration("RETENTION", 0) // 0 means no cleanup
 	httpPort := getEnv("HTTP_PORT", "8080")
 
 	// Create context with cancellation
@@ -94,8 +101,18 @@ func runServer() {
 		log.Fatalf("Failed to initialize web server: %v", err)
 	}
 
-	// Start collector (reads from source database, writes to history database)
-	coll := collector.New(sourceURL, store, pollInterval)
+	// Initialize collector (reads from source database, writes to history database)
+	coll, err := collector.New(ctx, sourceURL, store, pollInterval)
+	if err != nil {
+		log.Fatalf("Failed to initialize collector: %v", err)
+	}
+	defer coll.Close()
+
+	if retention > 0 {
+		coll.WithRetention(retention)
+		log.Printf("Data retention: %v", retention)
+	}
+
 	go coll.Start(ctx)
 
 	// Start HTTP server
@@ -139,6 +156,7 @@ Environment Variables:
   HISTORY_DATABASE_URL  Connection to history database (required for server)
 
   POLL_INTERVAL         Collection interval (default: 15m)
+  RETENTION             Data retention period, e.g., 720h for 30 days (default: unlimited)
   HTTP_PORT             Web server port (default: 8080)
 
   For 'init' command:

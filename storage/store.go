@@ -53,7 +53,7 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 
 	CREATE TABLE IF NOT EXISTS settings (
 		id SERIAL PRIMARY KEY,
-		snapshot_id INT REFERENCES snapshots(id),
+		snapshot_id INT REFERENCES snapshots(id) ON DELETE CASCADE,
 		variable TEXT NOT NULL,
 		value TEXT NOT NULL,
 		setting_type TEXT,
@@ -107,6 +107,38 @@ func (s *Store) GetLatestSnapshot(ctx context.Context) (map[string]Setting, erro
 	return settings, rows.Err()
 }
 
+// getLatestSnapshotTx retrieves the latest snapshot within a transaction
+func (s *Store) getLatestSnapshotTx(ctx context.Context, tx pgx.Tx) (map[string]Setting, error) {
+	var snapshotID int64
+	err := tx.QueryRow(ctx, "SELECT id FROM snapshots ORDER BY collected_at DESC LIMIT 1").Scan(&snapshotID)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx,
+		"SELECT variable, value, setting_type, description FROM settings WHERE snapshot_id = $1",
+		snapshotID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	settings := make(map[string]Setting)
+	for rows.Next() {
+		var setting Setting
+		if err := rows.Scan(&setting.Variable, &setting.Value, &setting.SettingType, &setting.Description); err != nil {
+			return nil, err
+		}
+		settings[setting.Variable] = setting
+	}
+
+	return settings, rows.Err()
+}
+
 func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -116,8 +148,8 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting) error {
 
 	now := time.Now()
 
-	// Get previous settings for comparison
-	prevSettings, err := s.GetLatestSnapshot(ctx)
+	// Get previous settings for comparison (inside transaction to avoid race condition)
+	prevSettings, err := s.getLatestSnapshotTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -209,4 +241,31 @@ func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
 	}
 
 	return changes, rows.Err()
+}
+
+// CleanupOldSnapshots removes snapshots older than the specified duration.
+// Associated settings are automatically deleted via ON DELETE CASCADE.
+func (s *Store) CleanupOldSnapshots(ctx context.Context, retention time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-retention)
+	result, err := s.pool.Exec(ctx,
+		"DELETE FROM snapshots WHERE collected_at < $1",
+		cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+// CleanupOldChanges removes change records older than the specified duration.
+func (s *Store) CleanupOldChanges(ctx context.Context, retention time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-retention)
+	result, err := s.pool.Exec(ctx,
+		"DELETE FROM changes WHERE detected_at < $1",
+		cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

@@ -82,12 +82,14 @@ func TestNew(t *testing.T) {
 	}
 	defer store.Close()
 
-	coll := New(sourceURL, store, 15*time.Minute)
+	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to create collector: %v", err)
+	}
+	defer coll.Close()
+
 	if coll == nil {
 		t.Fatal("Expected non-nil collector")
-	}
-	if coll.connString != sourceURL {
-		t.Error("Connection string not set correctly")
 	}
 	if coll.interval != 15*time.Minute {
 		t.Error("Interval not set correctly")
@@ -106,7 +108,11 @@ func TestCollect(t *testing.T) {
 	}
 	defer store.Close()
 
-	coll := New(sourceURL, store, 15*time.Minute)
+	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	if err != nil {
+		t.Fatalf("Failed to create collector: %v", err)
+	}
+	defer coll.Close()
 
 	// Call collect directly
 	err = coll.collect(ctx)
@@ -140,7 +146,11 @@ func TestStart(t *testing.T) {
 	defer store.Close()
 
 	// Use a short interval
-	coll := New(sourceURL, store, 1*time.Second)
+	coll, err := New(ctx, sourceURL, store, 1*time.Second)
+	if err != nil {
+		t.Fatalf("Failed to create collector: %v", err)
+	}
+	defer coll.Close()
 
 	// Start in a goroutine
 	done := make(chan struct{})
@@ -163,7 +173,7 @@ func TestStart(t *testing.T) {
 	}
 }
 
-func TestCollectWithInvalidURL(t *testing.T) {
+func TestNewWithInvalidURL(t *testing.T) {
 	_, historyURL := getTestURLs(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -175,10 +185,8 @@ func TestCollectWithInvalidURL(t *testing.T) {
 	}
 	defer store.Close()
 
-	// Use invalid source URL
-	coll := New("postgresql://invalid:5432/db?connect_timeout=1", store, 15*time.Minute)
-
-	err = coll.collect(ctx)
+	// Use invalid source URL - should fail at pool creation
+	_, err = New(ctx, "postgresql://invalid:5432/db?connect_timeout=1", store, 15*time.Minute)
 	if err == nil {
 		t.Error("Expected error with invalid URL")
 	}

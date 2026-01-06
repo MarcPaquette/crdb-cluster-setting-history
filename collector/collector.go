@@ -7,28 +7,47 @@ import (
 
 	"cluster-history/storage"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Collector struct {
-	connString string
-	store      *storage.Store
-	interval   time.Duration
+	pool      *pgxpool.Pool
+	store     *storage.Store
+	interval  time.Duration
+	retention time.Duration
 }
 
-func New(connString string, store *storage.Store, interval time.Duration) *Collector {
-	return &Collector{
-		connString: connString,
-		store:      store,
-		interval:   interval,
+func New(ctx context.Context, connString string, store *storage.Store, interval time.Duration) (*Collector, error) {
+	pool, err := pgxpool.New(ctx, connString)
+	if err != nil {
+		return nil, err
 	}
+	// Verify the connection works
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return &Collector{
+		pool:      pool,
+		store:     store,
+		interval:  interval,
+		retention: 0, // No cleanup by default
+	}, nil
+}
+
+func (c *Collector) Close() {
+	c.pool.Close()
+}
+
+// WithRetention sets the data retention period. Data older than this will be cleaned up.
+func (c *Collector) WithRetention(retention time.Duration) *Collector {
+	c.retention = retention
+	return c
 }
 
 func (c *Collector) Start(ctx context.Context) {
 	// Run immediately on start
-	if err := c.collect(ctx); err != nil {
-		log.Printf("Collection error: %v", err)
-	}
+	c.collectAndCleanup(ctx)
 
 	ticker := time.NewTicker(c.interval)
 	defer ticker.Stop()
@@ -38,23 +57,42 @@ func (c *Collector) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := c.collect(ctx); err != nil {
-				log.Printf("Collection error: %v", err)
-			}
+			c.collectAndCleanup(ctx)
 		}
 	}
+}
+
+func (c *Collector) collectAndCleanup(ctx context.Context) {
+	if err := c.collect(ctx); err != nil {
+		log.Printf("Collection error: %v", err)
+	}
+
+	if c.retention > 0 {
+		if err := c.cleanup(ctx); err != nil {
+			log.Printf("Cleanup error: %v", err)
+		}
+	}
+}
+
+func (c *Collector) cleanup(ctx context.Context) error {
+	snapshots, err := c.store.CleanupOldSnapshots(ctx, c.retention)
+	if err != nil {
+		return err
+	}
+	changes, err := c.store.CleanupOldChanges(ctx, c.retention)
+	if err != nil {
+		return err
+	}
+	if snapshots > 0 || changes > 0 {
+		log.Printf("Cleanup: removed %d snapshots, %d changes", snapshots, changes)
+	}
+	return nil
 }
 
 func (c *Collector) collect(ctx context.Context) error {
 	log.Printf("Collecting cluster settings...")
 
-	conn, err := pgx.Connect(ctx, c.connString)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(ctx)
-
-	rows, err := conn.Query(ctx, "SHOW CLUSTER SETTINGS")
+	rows, err := c.pool.Query(ctx, "SHOW CLUSTER SETTINGS")
 	if err != nil {
 		return err
 	}

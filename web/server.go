@@ -32,7 +32,19 @@ func New(store *storage.Store) (*Server, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/health", s.handleHealth)
 	return mux
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Simple health check - verify we can query the database
+	_, err := s.store.GetChanges(r.Context(), 1)
+	if err != nil {
+		http.Error(w, "unhealthy", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {

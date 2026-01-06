@@ -48,7 +48,11 @@ func TestFullIntegration(t *testing.T) {
 
 	// Step 3: Run collector once
 	t.Log("Step 3: Running collector...")
-	coll := collector.New(adminURL, store, time.Hour) // Interval doesn't matter, we call collect directly
+	coll, err := collector.New(ctx, adminURL, store, time.Hour) // Interval doesn't matter, we call collect directly
+	if err != nil {
+		t.Fatalf("Failed to create collector: %v", err)
+	}
+	defer coll.Close()
 
 	// We need to trigger a collection - let's start and immediately cancel
 	collCtx, collCancel := context.WithTimeout(ctx, 5*time.Second)
