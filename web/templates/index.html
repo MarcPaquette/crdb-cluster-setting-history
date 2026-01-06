@@ -114,6 +114,10 @@
         }
         .variable {
             font-weight: 500;
+            cursor: help;
+        }
+        .variable[title]:hover {
+            text-decoration: underline dotted;
         }
         em {
             color: var(--em-text);
@@ -144,7 +148,7 @@
                 {{range .Changes}}
                 <tr>
                     <td class="timestamp">{{.DetectedAt.Format "2006-01-02 15:04:05"}}</td>
-                    <td class="variable">{{.Variable}}</td>
+                    <td class="variable" {{if .Description}}title="{{.Description}}"{{end}}>{{.Variable}}</td>
                     <td class="value">
                         {{if .OldValue}}
                         <span class="old-value">{{.OldValue}}</span>

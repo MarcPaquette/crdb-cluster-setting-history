@@ -10,7 +10,12 @@ A Go service that periodically collects CockroachDB cluster settings and tracks 
 - Stores snapshots in a separate CockroachDB database for history
 - Detects and records changes (modified, added, removed settings)
 - Web UI displays a table of changes with timestamps and old/new values
+- Hover over setting names to see their descriptions
 - Configurable polling interval (1 minute to monthly)
+- Configurable data retention with automatic cleanup
+- Export changes to zipped CSV with cluster ID
+- Dark/light mode based on system preference
+- Health check endpoint for monitoring
 - Supports both secure and insecure CockroachDB clusters
 
 ## Prerequisites
@@ -23,6 +28,9 @@ A Go service that periodically collects CockroachDB cluster settings and tracks 
 
 ```bash
 go build -o cluster-history .
+
+# Or with version info
+go build -ldflags "-X main.Version=1.0.0" -o cluster-history .
 ```
 
 ## Quick Start
@@ -63,15 +71,29 @@ export HISTORY_DATABASE_URL="postgresql://history_user@localhost:26257/cluster_h
 
 Open http://localhost:8080 to view the changes dashboard.
 
+### 3. Export data (optional)
+
+Export all changes to a zipped CSV file:
+
+```bash
+./cluster-history export
+
+# Or specify output path
+./cluster-history export my-export.zip
+```
+
+The export includes the cluster ID from `crdb_internal.cluster_id()`.
+
 ## Configuration
 
 ### Environment Variables
 
 | Variable | Command | Description | Default |
 |----------|---------|-------------|---------|
-| `DATABASE_URL` | both | CockroachDB connection string. For `init`: admin connection. For server: monitored cluster | required |
-| `HISTORY_DATABASE_URL` | server | Connection to history database | required |
+| `DATABASE_URL` | all | CockroachDB connection string. For `init`: admin connection. For server/export: monitored cluster | required |
+| `HISTORY_DATABASE_URL` | server, export | Connection to history database | required |
 | `POLL_INTERVAL` | server | How often to collect settings (Go duration) | `15m` |
+| `RETENTION` | server | Data retention period (e.g., `720h` for 30 days) | unlimited |
 | `HTTP_PORT` | server | Web server port | `8080` |
 | `HISTORY_DB_NAME` | init | Database name to create | `cluster_history` |
 | `HISTORY_USERNAME` | init | Username to create | `history_user` |
@@ -120,7 +142,7 @@ CREATE TABLE snapshots (
 -- Individual settings within each snapshot
 CREATE TABLE settings (
     id SERIAL PRIMARY KEY,
-    snapshot_id INT REFERENCES snapshots(id),
+    snapshot_id INT REFERENCES snapshots(id) ON DELETE CASCADE,
     variable TEXT NOT NULL,
     value TEXT NOT NULL,
     setting_type TEXT,
@@ -133,7 +155,8 @@ CREATE TABLE changes (
     detected_at TIMESTAMPTZ NOT NULL,
     variable TEXT NOT NULL,
     old_value TEXT,
-    new_value TEXT
+    new_value TEXT,
+    description TEXT
 );
 ```
 
@@ -160,15 +183,16 @@ go tool cover -func=coverage.out
 cluster-history/
 ├── main.go              # Entry point, CLI handling
 ├── cmd/
-│   └── init.go          # Database/user initialization
+│   ├── init.go          # Database/user initialization
+│   └── export.go        # Data export to CSV/zip
 ├── collector/
 │   └── collector.go     # Periodic settings collection
 ├── storage/
 │   └── store.go         # CockroachDB storage operations
 ├── web/
-│   ├── server.go        # HTTP server
+│   ├── server.go        # HTTP server (/health endpoint)
 │   └── templates/
-│       └── index.html   # Web UI template
+│       └── index.html   # Web UI template (dark/light mode)
 └── *_test.go            # Tests
 ```
 

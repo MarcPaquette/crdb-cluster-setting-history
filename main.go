@@ -25,6 +25,9 @@ func main() {
 		case "init":
 			runInit()
 			return
+		case "export":
+			runExport()
+			return
 		case "-h", "--help", "help":
 			usage()
 			return
@@ -39,6 +42,36 @@ func main() {
 	}
 
 	runServer()
+}
+
+func runExport() {
+	sourceURL := os.Getenv("DATABASE_URL")
+	if sourceURL == "" {
+		log.Fatal("DATABASE_URL environment variable is required")
+	}
+
+	historyURL := os.Getenv("HISTORY_DATABASE_URL")
+	if historyURL == "" {
+		log.Fatal("HISTORY_DATABASE_URL environment variable is required")
+	}
+
+	outputPath := ""
+	if len(os.Args) > 2 {
+		outputPath = os.Args[2]
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	cfg := cmd.ExportConfig{
+		SourceURL:  sourceURL,
+		HistoryURL: historyURL,
+		OutputPath: outputPath,
+	}
+
+	if err := cmd.RunExport(ctx, cfg); err != nil {
+		log.Fatalf("Export failed: %v", err)
+	}
 }
 
 func runInit() {
@@ -145,15 +178,16 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `Usage: %s [command]
 
 Commands:
-  init    Initialize the history database and user
-  (none)  Run the cluster history server
+  init           Initialize the history database and user
+  export [path]  Export changes to a zipped CSV file (includes cluster_id)
+  (none)         Run the cluster history server
 
 Environment Variables:
   DATABASE_URL          CockroachDB connection string (required)
                         For 'init': admin connection to create database/user
-                        For server: connection to monitored cluster
+                        For server/export: connection to monitored cluster
 
-  HISTORY_DATABASE_URL  Connection to history database (required for server)
+  HISTORY_DATABASE_URL  Connection to history database (required for server/export)
 
   POLL_INTERVAL         Collection interval (default: 15m)
   RETENTION             Data retention period, e.g., 720h for 30 days (default: unlimited)

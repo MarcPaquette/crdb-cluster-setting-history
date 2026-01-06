@@ -16,10 +16,11 @@ type Setting struct {
 }
 
 type Change struct {
-	DetectedAt time.Time
-	Variable   string
-	OldValue   string
-	NewValue   string
+	DetectedAt  time.Time
+	Variable    string
+	OldValue    string
+	NewValue    string
+	Description string
 }
 
 type Store struct {
@@ -67,7 +68,8 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		detected_at TIMESTAMPTZ NOT NULL,
 		variable TEXT NOT NULL,
 		old_value TEXT,
-		new_value TEXT
+		new_value TEXT,
+		description TEXT
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_changes_detected ON changes(detected_at DESC);
@@ -97,6 +99,25 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 		_, err = pool.Exec(ctx, "ALTER TABLE settings ADD CONSTRAINT settings_snapshot_id_fkey FOREIGN KEY (snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE")
+		if err != nil {
+			return err
+		}
+	}
+
+	// Add description column to changes table if it doesn't exist
+	var hasDescriptionColumn bool
+	err = pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'changes' AND column_name = 'description'
+		)
+	`).Scan(&hasDescriptionColumn)
+	if err != nil {
+		return err
+	}
+
+	if !hasDescriptionColumn {
+		_, err = pool.Exec(ctx, "ALTER TABLE changes ADD COLUMN description TEXT")
 		if err != nil {
 			return err
 		}
@@ -209,15 +230,15 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting) error {
 		if prev, exists := prevSettings[variable]; exists {
 			if prev.Value != current.Value {
 				batch.Queue(
-					"INSERT INTO changes (detected_at, variable, old_value, new_value) VALUES ($1, $2, $3, $4)",
-					now, variable, prev.Value, current.Value,
+					"INSERT INTO changes (detected_at, variable, old_value, new_value, description) VALUES ($1, $2, $3, $4, $5)",
+					now, variable, prev.Value, current.Value, current.Description,
 				)
 			}
 		} else if prevSettings != nil {
 			// New setting (only record if we had previous snapshot)
 			batch.Queue(
-				"INSERT INTO changes (detected_at, variable, old_value, new_value) VALUES ($1, $2, $3, $4)",
-				now, variable, nil, current.Value,
+				"INSERT INTO changes (detected_at, variable, old_value, new_value, description) VALUES ($1, $2, $3, $4, $5)",
+				now, variable, nil, current.Value, current.Description,
 			)
 		}
 	}
@@ -227,8 +248,8 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting) error {
 		for variable, prev := range prevSettings {
 			if _, exists := currentSettings[variable]; !exists {
 				batch.Queue(
-					"INSERT INTO changes (detected_at, variable, old_value, new_value) VALUES ($1, $2, $3, $4)",
-					now, variable, prev.Value, nil,
+					"INSERT INTO changes (detected_at, variable, old_value, new_value, description) VALUES ($1, $2, $3, $4, $5)",
+					now, variable, prev.Value, nil, prev.Description,
 				)
 			}
 		}
@@ -245,7 +266,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting) error {
 
 func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
 	rows, err := s.pool.Query(ctx,
-		"SELECT detected_at, variable, old_value, new_value FROM changes ORDER BY detected_at DESC LIMIT $1",
+		"SELECT detected_at, variable, old_value, new_value, description FROM changes ORDER BY detected_at DESC LIMIT $1",
 		limit,
 	)
 	if err != nil {
@@ -256,8 +277,8 @@ func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
 	var changes []Change
 	for rows.Next() {
 		var c Change
-		var oldValue, newValue *string
-		if err := rows.Scan(&c.DetectedAt, &c.Variable, &oldValue, &newValue); err != nil {
+		var oldValue, newValue, description *string
+		if err := rows.Scan(&c.DetectedAt, &c.Variable, &oldValue, &newValue, &description); err != nil {
 			return nil, err
 		}
 		if oldValue != nil {
@@ -265,6 +286,9 @@ func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
 		}
 		if newValue != nil {
 			c.NewValue = *newValue
+		}
+		if description != nil {
+			c.Description = *description
 		}
 		changes = append(changes, c)
 	}
