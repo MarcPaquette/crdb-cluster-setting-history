@@ -17,9 +17,19 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "init" {
-		runInit()
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "init":
+			runInit()
+			return
+		case "-h", "--help", "help":
+			usage()
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
+			usage()
+			os.Exit(1)
+		}
 	}
 
 	runServer()
