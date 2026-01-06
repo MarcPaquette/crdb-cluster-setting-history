@@ -1,9 +1,9 @@
 # Build artifacts
-cluster-history
+crdb-cluster-history
 *.exe
 
 # Export files
-cluster-history-export-*.zip
+crdb-cluster-history-export-*.zip
 *.csv
 
 # Coverage

@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build
-go build -o cluster-history .
+go build -o crdb-cluster-history .
 
 # Build with version
-go build -ldflags "-X main.Version=1.0.0" -o cluster-history .
+go build -ldflags "-X main.Version=1.0.0" -o crdb-cluster-history .
 
 # Run all tests (requires running CockroachDB)
 # Use -p 1 to avoid serialization conflicts between parallel tests
@@ -54,11 +54,11 @@ The service monitors a CockroachDB cluster by periodically querying `SHOW CLUSTE
 ## CLI Commands
 
 ```bash
-./cluster-history           # Run the server
-./cluster-history init      # Initialize history database and user
-./cluster-history export    # Export changes to zipped CSV
-./cluster-history --version # Show version
-./cluster-history --help    # Show usage
+./crdb-cluster-history           # Run the server
+./crdb-cluster-history init      # Initialize history database and user
+./crdb-cluster-history export    # Export changes to zipped CSV
+./crdb-cluster-history --version # Show version
+./crdb-cluster-history --help    # Show usage
 ```
 
 ## Running Locally
@@ -76,17 +76,17 @@ docker-compose down -v      # Stop and remove data
 
 ```bash
 # Initialize history database (one-time)
-DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable" ./cluster-history init
+DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable" ./crdb-cluster-history init
 
 # Run the service
 DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable" \
 HISTORY_DATABASE_URL="postgresql://history_user@localhost:26257/cluster_history?sslmode=disable" \
-./cluster-history
+./crdb-cluster-history
 
 # Export data
 DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable" \
 HISTORY_DATABASE_URL="postgresql://history_user@localhost:26257/cluster_history?sslmode=disable" \
-./cluster-history export
+./crdb-cluster-history export
 ```
 
 **Endpoints:**

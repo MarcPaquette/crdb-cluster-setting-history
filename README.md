@@ -27,10 +27,10 @@ A Go service that periodically collects CockroachDB cluster settings and tracks 
 ## Build
 
 ```bash
-go build -o cluster-history .
+go build -o crdb-cluster-history .
 
 # Or with version info
-go build -ldflags "-X main.Version=1.0.0" -o cluster-history .
+go build -ldflags "-X main.Version=1.0.0" -o crdb-cluster-history .
 ```
 
 ## Docker
@@ -46,7 +46,7 @@ docker-compose up -d
 This starts:
 - CockroachDB single-node cluster
 - Initializes the history database
-- Runs the cluster-history service
+- Runs the crdb-cluster-history service
 
 Open http://localhost:8080 to view the dashboard.
 
@@ -54,17 +54,17 @@ Open http://localhost:8080 to view the dashboard.
 
 ```bash
 # Build image
-docker build -t cluster-history .
+docker build -t crdb-cluster-history .
 
 # Build with version
-docker build --build-arg VERSION=1.0.0 -t cluster-history:1.0.0 .
+docker build --build-arg VERSION=1.0.0 -t crdb-cluster-history:1.0.0 .
 
 # Run container (connect to external CockroachDB)
 docker run -d \
   -e DATABASE_URL="postgresql://root@host.docker.internal:26257/defaultdb?sslmode=disable" \
   -e HISTORY_DATABASE_URL="postgresql://history_user@host.docker.internal:26257/cluster_history?sslmode=disable" \
   -p 8080:8080 \
-  cluster-history
+  crdb-cluster-history
 
 # For Podman, use host.containers.internal instead of host.docker.internal
 ```
@@ -75,7 +75,7 @@ The Docker commands also work with Podman:
 
 ```bash
 # Build
-podman build -t cluster-history .
+podman build -t crdb-cluster-history .
 
 # Compose (requires podman-compose or Podman 4.1+)
 podman-compose up -d
@@ -97,7 +97,7 @@ export DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable
 export HISTORY_PASSWORD="your_secure_password"
 
 # Run initialization
-./cluster-history init
+./crdb-cluster-history init
 ```
 
 The init command will:
@@ -116,7 +116,7 @@ export DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable
 export HISTORY_DATABASE_URL="postgresql://history_user@localhost:26257/cluster_history?sslmode=disable"
 
 # Start the service
-./cluster-history
+./crdb-cluster-history
 ```
 
 Open http://localhost:8080 to view the changes dashboard.
@@ -126,10 +126,10 @@ Open http://localhost:8080 to view the changes dashboard.
 Export all changes to a zipped CSV file:
 
 ```bash
-./cluster-history export
+./crdb-cluster-history export
 
 # Or specify output path
-./cluster-history export my-export.zip
+./crdb-cluster-history export my-export.zip
 ```
 
 The export includes the cluster ID from `crdb_internal.cluster_id()`.
@@ -230,7 +230,7 @@ go tool cover -func=coverage.out
 ### Project Structure
 
 ```
-cluster-history/
+crdb-cluster-history/
 ├── main.go              # Entry point, CLI handling
 ├── cmd/
 │   ├── init.go          # Database/user initialization

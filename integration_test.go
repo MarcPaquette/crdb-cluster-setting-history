@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"cluster-history/cmd"
-	"cluster-history/collector"
-	"cluster-history/storage"
+	"crdb-cluster-history/cmd"
+	"crdb-cluster-history/collector"
+	"crdb-cluster-history/storage"
 )
 
 func TestFullIntegration(t *testing.T) {

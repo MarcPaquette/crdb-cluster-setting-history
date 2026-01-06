@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"cluster-history/storage"
+	"crdb-cluster-history/storage"
 )
 
 func getTestDB(t *testing.T) string {

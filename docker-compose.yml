@@ -33,7 +33,7 @@ services:
         condition: service_healthy
 
   # Cluster history service
-  cluster-history:
+  crdb-cluster-history:
     build:
       context: .
       args:

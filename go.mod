@@ -1,4 +1,4 @@
-module cluster-history
+module crdb-cluster-history
 
 go 1.25.5
 

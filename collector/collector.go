@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"cluster-history/storage"
+	"crdb-cluster-history/storage"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )

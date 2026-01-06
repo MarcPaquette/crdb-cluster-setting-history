@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"cluster-history/cmd"
-	"cluster-history/collector"
-	"cluster-history/storage"
-	"cluster-history/web"
+	"crdb-cluster-history/cmd"
+	"crdb-cluster-history/collector"
+	"crdb-cluster-history/storage"
+	"crdb-cluster-history/web"
 )
 
 // Version is set at build time via -ldflags
@@ -32,7 +32,7 @@ func main() {
 			usage()
 			return
 		case "-v", "--version", "version":
-			fmt.Printf("cluster-history %s\n", Version)
+			fmt.Printf("crdb-cluster-history %s\n", Version)
 			return
 		default:
 			fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])

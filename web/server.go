@@ -6,7 +6,7 @@ import (
 	"log"
 	"net/http"
 
-	"cluster-history/storage"
+	"crdb-cluster-history/storage"
 )
 
 //go:embed templates/*

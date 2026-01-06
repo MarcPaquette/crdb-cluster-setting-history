@@ -15,7 +15,7 @@ COPY . .
 
 # Build the binary
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.Version=${VERSION}" -o cluster-history .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.Version=${VERSION}" -o crdb-cluster-history .
 
 # Runtime stage
 FROM alpine:3.19
@@ -30,7 +30,7 @@ RUN adduser -D -g '' appuser
 USER appuser
 
 # Copy binary from builder
-COPY --from=builder /app/cluster-history .
+COPY --from=builder /app/crdb-cluster-history .
 
 # Expose default port
 EXPOSE 8080
@@ -39,4 +39,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
-ENTRYPOINT ["./cluster-history"]
+ENTRYPOINT ["./crdb-cluster-history"]

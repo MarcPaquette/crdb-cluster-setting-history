@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"cluster-history/storage"
+	"crdb-cluster-history/storage"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -60,7 +60,7 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 	// Determine output path
 	outputPath := cfg.OutputPath
 	if outputPath == "" {
-		outputPath = fmt.Sprintf("cluster-history-export-%s.zip", time.Now().Format("20060102-150405"))
+		outputPath = fmt.Sprintf("crdb-cluster-history-export-%s.zip", time.Now().Format("20060102-150405"))
 	}
 
 	// Create zip file
@@ -74,7 +74,7 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 	defer zipWriter.Close()
 
 	// Create CSV file inside zip
-	csvFileName := fmt.Sprintf("cluster-history-%s.csv", clusterID)
+	csvFileName := fmt.Sprintf("crdb-cluster-history-%s.csv", clusterID)
 	csvWriter, err := zipWriter.Create(csvFileName)
 	if err != nil {
 		return fmt.Errorf("failed to create CSV in zip: %w", err)
