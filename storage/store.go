@@ -73,6 +73,12 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_changes_detected ON changes(detected_at DESC);
+
+	CREATE TABLE IF NOT EXISTS metadata (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL,
+		updated_at TIMESTAMPTZ NOT NULL
+	);
 	`
 	_, err := pool.Exec(ctx, schema)
 	if err != nil {
@@ -321,4 +327,37 @@ func (s *Store) CleanupOldChanges(ctx context.Context, retention time.Duration) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+// SetMetadata stores a key-value pair in the metadata table.
+func (s *Store) SetMetadata(ctx context.Context, key, value string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO metadata (key, value, updated_at) VALUES ($1, $2, NOW())
+		 ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+		key, value,
+	)
+	return err
+}
+
+// GetMetadata retrieves a value from the metadata table.
+func (s *Store) GetMetadata(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.pool.QueryRow(ctx,
+		"SELECT value FROM metadata WHERE key = $1",
+		key,
+	).Scan(&value)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+// GetClusterID retrieves the stored cluster ID.
+func (s *Store) GetClusterID(ctx context.Context) (string, error) {
+	return s.GetMetadata(ctx, "cluster_id")
+}
+
+// SetClusterID stores the cluster ID.
+func (s *Store) SetClusterID(ctx context.Context, clusterID string) error {
+	return s.SetMetadata(ctx, "cluster_id", clusterID)
 }

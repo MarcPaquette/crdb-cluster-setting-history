@@ -33,6 +33,56 @@ go build -o cluster-history .
 go build -ldflags "-X main.Version=1.0.0" -o cluster-history .
 ```
 
+## Docker
+
+### Quick Start with Docker Compose
+
+The easiest way to run the service locally:
+
+```bash
+docker-compose up -d
+```
+
+This starts:
+- CockroachDB single-node cluster
+- Initializes the history database
+- Runs the cluster-history service
+
+Open http://localhost:8080 to view the dashboard.
+
+### Build Docker Image
+
+```bash
+# Build image
+docker build -t cluster-history .
+
+# Build with version
+docker build --build-arg VERSION=1.0.0 -t cluster-history:1.0.0 .
+
+# Run container (connect to external CockroachDB)
+docker run -d \
+  -e DATABASE_URL="postgresql://root@host.docker.internal:26257/defaultdb?sslmode=disable" \
+  -e HISTORY_DATABASE_URL="postgresql://history_user@host.docker.internal:26257/cluster_history?sslmode=disable" \
+  -p 8080:8080 \
+  cluster-history
+
+# For Podman, use host.containers.internal instead of host.docker.internal
+```
+
+### Podman
+
+The Docker commands also work with Podman:
+
+```bash
+# Build
+podman build -t cluster-history .
+
+# Compose (requires podman-compose or Podman 4.1+)
+podman-compose up -d
+# or
+podman compose up -d
+```
+
 ## Quick Start
 
 ### 1. Initialize the history database

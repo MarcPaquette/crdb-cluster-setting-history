@@ -63,6 +63,17 @@ The service monitors a CockroachDB cluster by periodically querying `SHOW CLUSTE
 
 ## Running Locally
 
+### With Docker Compose (easiest)
+
+```bash
+docker-compose up -d        # Start everything
+docker-compose logs -f      # View logs
+docker-compose down         # Stop
+docker-compose down -v      # Stop and remove data
+```
+
+### Without Docker
+
 ```bash
 # Initialize history database (one-time)
 DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable" ./cluster-history init

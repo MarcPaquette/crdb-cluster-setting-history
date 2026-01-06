@@ -51,7 +51,13 @@
         }
         h1 {
             color: var(--text-primary);
+            margin-bottom: 5px;
+        }
+        .cluster-id {
+            font-size: 12px;
+            color: var(--text-secondary);
             margin-bottom: 20px;
+            font-family: 'Monaco', 'Menlo', monospace;
         }
         .container {
             max-width: 1200px;
@@ -127,6 +133,7 @@
 <body>
     <div class="container">
         <h1>CockroachDB Cluster Settings History</h1>
+        {{if .ClusterID}}<div class="cluster-id">Cluster ID: {{.ClusterID}}</div>{{end}}
 
         <div class="controls">
             <label>

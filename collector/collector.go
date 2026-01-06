@@ -92,6 +92,11 @@ func (c *Collector) cleanup(ctx context.Context) error {
 func (c *Collector) collect(ctx context.Context) error {
 	log.Printf("Collecting cluster settings...")
 
+	// Fetch and store cluster ID (only updates if changed)
+	if err := c.updateClusterID(ctx); err != nil {
+		log.Printf("Warning: failed to update cluster ID: %v", err)
+	}
+
 	rows, err := c.pool.Query(ctx, "SHOW CLUSTER SETTINGS")
 	if err != nil {
 		return err
@@ -119,4 +124,13 @@ func (c *Collector) collect(ctx context.Context) error {
 
 	log.Printf("Collected %d settings", len(settings))
 	return nil
+}
+
+func (c *Collector) updateClusterID(ctx context.Context) error {
+	var clusterID string
+	err := c.pool.QueryRow(ctx, "SELECT crdb_internal.cluster_id()::TEXT").Scan(&clusterID)
+	if err != nil {
+		return err
+	}
+	return c.store.SetClusterID(ctx, clusterID)
 }

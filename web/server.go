@@ -48,17 +48,27 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	changes, err := s.store.GetChanges(r.Context(), 100)
+	ctx := r.Context()
+
+	changes, err := s.store.GetChanges(ctx, 100)
 	if err != nil {
 		log.Printf("Error getting changes: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
+	clusterID, err := s.store.GetClusterID(ctx)
+	if err != nil {
+		log.Printf("Error getting cluster ID: %v", err)
+		// Don't fail, just leave it empty
+	}
+
 	data := struct {
-		Changes []storage.Change
+		ClusterID string
+		Changes   []storage.Change
 	}{
-		Changes: changes,
+		ClusterID: clusterID,
+		Changes:   changes,
 	}
 
 	if err := s.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {

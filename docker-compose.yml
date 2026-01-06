@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # CockroachDB single-node cluster for development
+  cockroachdb:
+    image: cockroachdb/cockroach:v23.2.0
+    command: start-single-node --insecure --advertise-addr=cockroachdb
+    ports:
+      - "26257:26257"  # SQL port
+      - "8081:8080"    # Admin UI (mapped to 8081 to avoid conflict)
+    volumes:
+      - cockroach-data:/cockroach/cockroach-data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Initialize the history database (runs once)
+  init:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    command: init
+    environment:
+      DATABASE_URL: postgresql://root@cockroachdb:26257/defaultdb?sslmode=disable
+      HISTORY_DB_NAME: cluster_history
+      HISTORY_USERNAME: history_user
+    depends_on:
+      cockroachdb:
+        condition: service_healthy
+
+  # Cluster history service
+  cluster-history:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://root@cockroachdb:26257/defaultdb?sslmode=disable
+      HISTORY_DATABASE_URL: postgresql://history_user@cockroachdb:26257/cluster_history?sslmode=disable
+      POLL_INTERVAL: 1m
+      HTTP_PORT: "8080"
+      # RETENTION: 720h  # Uncomment to enable 30-day retention
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  cockroach-data:

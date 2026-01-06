@@ -13,4 +13,20 @@ coverage.out
 .idea/
 .vscode/
 *.swp
-.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Documentation
+*.md
+!go.mod
+!go.sum
+
+# Test files
+*_test.go
