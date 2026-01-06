@@ -128,6 +128,33 @@
         em {
             color: var(--em-text);
         }
+        .search-box {
+            padding: 8px 12px;
+            font-size: 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            width: 300px;
+            margin-right: 20px;
+        }
+        .search-box:focus {
+            outline: none;
+            border-color: var(--accent-color);
+            box-shadow: 0 0 0 2px rgba(105, 51, 255, 0.2);
+        }
+        .search-box::placeholder {
+            color: var(--text-secondary);
+        }
+        .hidden {
+            display: none;
+        }
+        .no-results {
+            padding: 20px;
+            text-align: center;
+            color: var(--text-secondary);
+            background: var(--bg-secondary);
+        }
     </style>
 </head>
 <body>
@@ -137,6 +164,7 @@
         {{if .DatabaseVersion}}<div class="cluster-id">Version: {{.DatabaseVersion}}</div>{{end}}
 
         <div class="controls">
+            <input type="text" id="searchBox" class="search-box" placeholder="Search settings...">
             <label>
                 <input type="checkbox" id="autoRefresh"> Auto-refresh (30s)
             </label>
@@ -177,6 +205,7 @@
                 {{end}}
             </tbody>
         </table>
+        <div id="noResults" class="no-results hidden">No matching results found.</div>
         {{else}}
         <div class="no-changes">
             No changes detected yet. Settings are being collected periodically.
@@ -186,6 +215,9 @@
 
     <script>
         const checkbox = document.getElementById('autoRefresh');
+        const searchBox = document.getElementById('searchBox');
+        const table = document.querySelector('table');
+        const noResults = document.getElementById('noResults');
         let intervalId = null;
 
         checkbox.addEventListener('change', function() {
@@ -196,6 +228,32 @@
                 intervalId = null;
             }
         });
+
+        if (searchBox && table) {
+            searchBox.addEventListener('input', function() {
+                const searchTerm = this.value.toLowerCase();
+                const rows = table.querySelectorAll('tbody tr');
+                let visibleCount = 0;
+
+                rows.forEach(row => {
+                    const text = row.textContent.toLowerCase();
+                    if (text.includes(searchTerm)) {
+                        row.classList.remove('hidden');
+                        visibleCount++;
+                    } else {
+                        row.classList.add('hidden');
+                    }
+                });
+
+                if (noResults) {
+                    if (visibleCount === 0 && searchTerm !== '') {
+                        noResults.classList.remove('hidden');
+                    } else {
+                        noResults.classList.add('hidden');
+                    }
+                }
+            });
+        }
     </script>
 </body>
 </html>
