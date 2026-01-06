@@ -9,11 +9,15 @@ A Go service that periodically collects CockroachDB cluster settings and tracks 
 - Periodically collects `SHOW CLUSTER SETTINGS` from a CockroachDB cluster
 - Stores snapshots in a separate CockroachDB database for history
 - Detects and records changes (modified, added, removed settings)
-- Web UI displays a table of changes with timestamps and old/new values
+- Tracks database version at the time of each change
+- Web UI displays a table of changes with timestamps, version, and old/new values
+- Real-time search filter to quickly find settings
+- Download CSV button to export changes directly from the web UI
 - Hover over setting names to see their descriptions
+- Displays cluster ID and database version in the header
 - Configurable polling interval (1 minute to monthly)
 - Configurable data retention with automatic cleanup
-- Export changes to zipped CSV with cluster ID
+- CLI export command for scripted exports
 - Dark/light mode based on system preference
 - Health check endpoint for monitoring
 - Supports both secure and insecure CockroachDB clusters
@@ -176,9 +180,9 @@ export POLL_INTERVAL="720h"  # Monthly (30 days)
 
 ### Components
 
-- **Collector**: Periodically queries `SHOW CLUSTER SETTINGS` and stores snapshots
-- **Storage**: Manages history database, detects changes between snapshots
-- **Web Server**: Displays changes in a table with timestamps
+- **Collector**: Periodically queries `SHOW CLUSTER SETTINGS` and stores snapshots, tracks database version
+- **Storage**: Manages history database, detects changes between snapshots, stores metadata (cluster ID, version)
+- **Web Server**: Displays changes with search filter, download button, and version tracking
 
 ### Database Schema
 
@@ -206,7 +210,15 @@ CREATE TABLE changes (
     variable TEXT NOT NULL,
     old_value TEXT,
     new_value TEXT,
-    description TEXT
+    description TEXT,
+    version TEXT  -- Database version at time of change (e.g., "v25.4.2")
+);
+
+-- Key-value metadata (cluster_id, database_version, etc.)
+CREATE TABLE metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
 );
 ```
 
@@ -234,17 +246,25 @@ crdb-cluster-history/
 ├── main.go              # Entry point, CLI handling
 ├── cmd/
 │   ├── init.go          # Database/user initialization
-│   └── export.go        # Data export to CSV/zip
+│   └── export.go        # CLI export to CSV/zip
 ├── collector/
 │   └── collector.go     # Periodic settings collection
 ├── storage/
 │   └── store.go         # CockroachDB storage operations
 ├── web/
-│   ├── server.go        # HTTP server (/health endpoint)
+│   ├── server.go        # HTTP server (/, /health, /export endpoints)
 │   └── templates/
-│       └── index.html   # Web UI template (dark/light mode)
+│       └── index.html   # Web UI (search, download, dark/light mode)
 └── *_test.go            # Tests
 ```
+
+### Web Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `/` | Main dashboard with changes table, search, and download button |
+| `/health` | Health check endpoint (returns "ok" if database is accessible) |
+| `/export` | Download changes as zipped CSV file |
 
 ## License
 

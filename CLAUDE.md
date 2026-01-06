@@ -36,11 +36,11 @@ The service monitors a CockroachDB cluster by periodically querying `SHOW CLUSTE
 **Data flow:** Monitored CockroachDB → Collector (periodic) → History CockroachDB → Web Server
 
 **Key packages:**
-- `collector/` - Periodic collection using `pgxpool`, queries `SHOW CLUSTER SETTINGS` (6 columns: variable, value, setting_type, description, default_value, origin), supports data retention/cleanup
-- `storage/` - CockroachDB operations using `pgxpool`, change detection between snapshots, stores setting descriptions
-- `web/` - HTTP server with embedded HTML template, `/health` endpoint, dark/light mode support, description tooltips on hover
+- `collector/` - Periodic collection using `pgxpool`, queries `SHOW CLUSTER SETTINGS` (6 columns: variable, value, setting_type, description, default_value, origin), tracks database version, supports data retention/cleanup
+- `storage/` - CockroachDB operations using `pgxpool`, change detection between snapshots, stores setting descriptions, metadata table for cluster_id and database_version, version tracking per change
+- `web/` - HTTP server with embedded HTML template, endpoints: `/` (dashboard), `/health` (health check), `/export` (CSV download). Features: real-time search filter, download CSV button, dark/light mode, description tooltips, version column
 - `cmd/init.go` - Init command to create history database and user, auto-detects insecure mode
-- `cmd/export.go` - Export command to export changes to zipped CSV with cluster_id
+- `cmd/export.go` - CLI export command to export changes to zipped CSV with cluster_id and version
 
 **Two database connections:**
 - `DATABASE_URL` - The cluster being monitored (read-only access needed)
@@ -90,5 +90,6 @@ HISTORY_DATABASE_URL="postgresql://history_user@localhost:26257/cluster_history?
 ```
 
 **Endpoints:**
-- http://localhost:8080 - Web UI (changes table with dark/light mode)
+- http://localhost:8080 - Web UI (changes table with search, download, version column, dark/light mode)
 - http://localhost:8080/health - Health check endpoint
+- http://localhost:8080/export - Download changes as zipped CSV

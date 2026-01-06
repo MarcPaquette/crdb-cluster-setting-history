@@ -64,11 +64,14 @@
             margin: 0 auto;
         }
         .controls {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
             margin-bottom: 20px;
             color: var(--text-secondary);
         }
         .controls label {
-            margin-right: 10px;
             cursor: pointer;
         }
         table {
@@ -155,6 +158,20 @@
             color: var(--text-secondary);
             background: var(--bg-secondary);
         }
+        .export-btn {
+            padding: 8px 16px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            background: var(--accent-color);
+            color: white;
+            cursor: pointer;
+            text-decoration: none;
+            margin-left: 10px;
+        }
+        .export-btn:hover {
+            opacity: 0.9;
+        }
     </style>
 </head>
 <body>
@@ -168,6 +185,7 @@
             <label>
                 <input type="checkbox" id="autoRefresh"> Auto-refresh (30s)
             </label>
+            <a href="/export" class="export-btn">Download CSV</a>
         </div>
 
         {{if .Changes}}
