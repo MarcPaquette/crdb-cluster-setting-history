@@ -18,6 +18,17 @@ func getTestDB(t *testing.T) string {
 	return url
 }
 
+// cleanupTestData removes all test data from the database
+func cleanupTestData(t *testing.T, store *Store) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Delete in order to respect foreign keys (or CASCADE handles it)
+	store.pool.Exec(ctx, "DELETE FROM changes")
+	store.pool.Exec(ctx, "DELETE FROM settings")
+	store.pool.Exec(ctx, "DELETE FROM snapshots")
+}
+
 func TestNew(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -1,13 +1,15 @@
-# Binary
+# Build artifacts
 cluster-history
+*.exe
 
-# Test coverage
+# Export files
+cluster-history-export-*.zip
+*.csv
+
+# Coverage
 coverage.out
 
 # IDE
 .idea/
 .vscode/
 *.swp
-
-# OS
-.DS_Store
