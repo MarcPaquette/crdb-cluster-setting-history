@@ -1,0 +1,185 @@
+package collector
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"cluster-history/storage"
+
+	"github.com/jackc/pgx/v5"
+)
+
+func TestShowClusterSettingsColumns(t *testing.T) {
+	connStr := os.Getenv("DATABASE_URL")
+	if connStr == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, connStr)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	rows, err := conn.Query(ctx, "SHOW CLUSTER SETTINGS")
+	if err != nil {
+		t.Fatalf("Failed to query: %v", err)
+	}
+	defer rows.Close()
+
+	// Check column names
+	fieldDescs := rows.FieldDescriptions()
+	t.Logf("SHOW CLUSTER SETTINGS returns %d columns:", len(fieldDescs))
+	for i, fd := range fieldDescs {
+		t.Logf("  [%d] %s", i, fd.Name)
+	}
+
+	expectedCols := []string{"variable", "value", "setting_type", "description", "default_value", "origin"}
+	if len(fieldDescs) != len(expectedCols) {
+		t.Errorf("Expected %d columns, got %d", len(expectedCols), len(fieldDescs))
+	}
+
+	for i, expected := range expectedCols {
+		if i < len(fieldDescs) && string(fieldDescs[i].Name) != expected {
+			t.Errorf("Column %d: expected %q, got %q", i, expected, fieldDescs[i].Name)
+		}
+	}
+
+	// Test scanning a row
+	if rows.Next() {
+		var variable, value, settingType, description, defaultValue, origin string
+		err := rows.Scan(&variable, &value, &settingType, &description, &defaultValue, &origin)
+		if err != nil {
+			t.Fatalf("Failed to scan row: %v", err)
+		}
+		t.Logf("Sample row: variable=%s, value=%s, type=%s", variable, value, settingType)
+	}
+}
+
+func getTestURLs(t *testing.T) (string, string) {
+	sourceURL := os.Getenv("DATABASE_URL")
+	historyURL := os.Getenv("HISTORY_DATABASE_URL")
+	if sourceURL == "" || historyURL == "" {
+		t.Skip("DATABASE_URL and HISTORY_DATABASE_URL must be set")
+	}
+	return sourceURL, historyURL
+}
+
+func TestNew(t *testing.T) {
+	sourceURL, historyURL := getTestURLs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, historyURL)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	coll := New(sourceURL, store, 15*time.Minute)
+	if coll == nil {
+		t.Fatal("Expected non-nil collector")
+	}
+	if coll.connString != sourceURL {
+		t.Error("Connection string not set correctly")
+	}
+	if coll.interval != 15*time.Minute {
+		t.Error("Interval not set correctly")
+	}
+}
+
+func TestCollect(t *testing.T) {
+	sourceURL, historyURL := getTestURLs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, historyURL)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	coll := New(sourceURL, store, 15*time.Minute)
+
+	// Call collect directly
+	err = coll.collect(ctx)
+	if err != nil {
+		t.Fatalf("collect() failed: %v", err)
+	}
+
+	// Verify data was stored
+	snapshot, err := store.GetLatestSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+
+	if snapshot == nil || len(snapshot) == 0 {
+		t.Error("Expected snapshot to have settings after collect()")
+	}
+
+	t.Logf("Collected %d settings", len(snapshot))
+}
+
+func TestStart(t *testing.T) {
+	sourceURL, historyURL := getTestURLs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, historyURL)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Use a short interval
+	coll := New(sourceURL, store, 1*time.Second)
+
+	// Start in a goroutine
+	done := make(chan struct{})
+	go func() {
+		coll.Start(ctx)
+		close(done)
+	}()
+
+	// Wait for context to timeout
+	<-done
+
+	// Verify data was collected
+	snapshot, err := store.GetLatestSnapshot(ctx)
+	if err != nil && ctx.Err() == nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+
+	if snapshot != nil && len(snapshot) > 0 {
+		t.Logf("Start() collected %d settings", len(snapshot))
+	}
+}
+
+func TestCollectWithInvalidURL(t *testing.T) {
+	_, historyURL := getTestURLs(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, historyURL)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Use invalid source URL
+	coll := New("postgresql://invalid:5432/db?connect_timeout=1", store, 15*time.Minute)
+
+	err = coll.collect(ctx)
+	if err == nil {
+		t.Error("Expected error with invalid URL")
+	}
+}

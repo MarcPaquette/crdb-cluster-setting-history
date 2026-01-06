@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CockroachDB Cluster Settings History</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .controls {
+            margin-bottom: 20px;
+        }
+        .controls label {
+            margin-right: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        th {
+            background: #6933ff;
+            color: white;
+            font-weight: 500;
+        }
+        tr:hover {
+            background: #f9f9f9;
+        }
+        .no-changes {
+            padding: 40px;
+            text-align: center;
+            color: #666;
+            background: white;
+            border-radius: 4px;
+        }
+        .value {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+        .old-value {
+            color: #c00;
+            background: #fee;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        .new-value {
+            color: #080;
+            background: #efe;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        .timestamp {
+            white-space: nowrap;
+            color: #666;
+        }
+        .variable {
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>CockroachDB Cluster Settings History</h1>
+
+        <div class="controls">
+            <label>
+                <input type="checkbox" id="autoRefresh"> Auto-refresh (30s)
+            </label>
+        </div>
+
+        {{if .Changes}}
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Setting</th>
+                    <th>Old Value</th>
+                    <th>New Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Changes}}
+                <tr>
+                    <td class="timestamp">{{.DetectedAt.Format "2006-01-02 15:04:05"}}</td>
+                    <td class="variable">{{.Variable}}</td>
+                    <td class="value">
+                        {{if .OldValue}}
+                        <span class="old-value">{{.OldValue}}</span>
+                        {{else}}
+                        <em>(new)</em>
+                        {{end}}
+                    </td>
+                    <td class="value">
+                        {{if .NewValue}}
+                        <span class="new-value">{{.NewValue}}</span>
+                        {{else}}
+                        <em>(removed)</em>
+                        {{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{else}}
+        <div class="no-changes">
+            No changes detected yet. Settings are being collected periodically.
+        </div>
+        {{end}}
+    </div>
+
+    <script>
+        const checkbox = document.getElementById('autoRefresh');
+        let intervalId = null;
+
+        checkbox.addEventListener('change', function() {
+            if (this.checked) {
+                intervalId = setInterval(() => location.reload(), 30000);
+            } else if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+            }
+        });
+    </script>
+</body>
+</html>
