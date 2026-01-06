@@ -350,3 +350,164 @@ func TestCleanupOldChanges(t *testing.T) {
 		t.Errorf("Expected 0 changes after cleanup, got %d", len(changes))
 	}
 }
+
+func TestSetAndGetMetadata(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Test setting metadata
+	err = store.SetMetadata(ctx, "test_key", "test_value")
+	if err != nil {
+		t.Fatalf("Failed to set metadata: %v", err)
+	}
+
+	// Test getting metadata
+	value, err := store.GetMetadata(ctx, "test_key")
+	if err != nil {
+		t.Fatalf("Failed to get metadata: %v", err)
+	}
+	if value != "test_value" {
+		t.Errorf("Expected 'test_value', got '%s'", value)
+	}
+
+	// Test updating metadata
+	err = store.SetMetadata(ctx, "test_key", "updated_value")
+	if err != nil {
+		t.Fatalf("Failed to update metadata: %v", err)
+	}
+
+	value, err = store.GetMetadata(ctx, "test_key")
+	if err != nil {
+		t.Fatalf("Failed to get updated metadata: %v", err)
+	}
+	if value != "updated_value" {
+		t.Errorf("Expected 'updated_value', got '%s'", value)
+	}
+
+	// Test getting non-existent key
+	value, err = store.GetMetadata(ctx, "non_existent_key")
+	if err != nil {
+		t.Fatalf("Failed to get non-existent metadata: %v", err)
+	}
+	if value != "" {
+		t.Errorf("Expected empty string for non-existent key, got '%s'", value)
+	}
+}
+
+func TestClusterIDMetadata(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	testClusterID := "test-cluster-id-12345"
+
+	// Test setting cluster ID
+	err = store.SetClusterID(ctx, testClusterID)
+	if err != nil {
+		t.Fatalf("Failed to set cluster ID: %v", err)
+	}
+
+	// Test getting cluster ID
+	clusterID, err := store.GetClusterID(ctx)
+	if err != nil {
+		t.Fatalf("Failed to get cluster ID: %v", err)
+	}
+	if clusterID != testClusterID {
+		t.Errorf("Expected '%s', got '%s'", testClusterID, clusterID)
+	}
+}
+
+func TestDatabaseVersionMetadata(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	testVersion := "CockroachDB CCL v25.4.2"
+
+	// Test setting database version
+	err = store.SetDatabaseVersion(ctx, testVersion)
+	if err != nil {
+		t.Fatalf("Failed to set database version: %v", err)
+	}
+
+	// Test getting database version
+	version, err := store.GetDatabaseVersion(ctx)
+	if err != nil {
+		t.Fatalf("Failed to get database version: %v", err)
+	}
+	if version != testVersion {
+		t.Errorf("Expected '%s', got '%s'", testVersion, version)
+	}
+}
+
+func TestChangeWithVersion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Clean up any existing data
+	cleanupTestData(t, store)
+
+	testVersion := "v25.4.2"
+
+	// First snapshot
+	settings1 := []Setting{
+		{Variable: "version.test.setting", Value: "original", SettingType: "s", Description: "Test"},
+	}
+	err = store.SaveSnapshot(ctx, settings1, testVersion)
+	if err != nil {
+		t.Fatalf("Failed to save first snapshot: %v", err)
+	}
+
+	// Second snapshot with changed value
+	settings2 := []Setting{
+		{Variable: "version.test.setting", Value: "modified", SettingType: "s", Description: "Test"},
+	}
+	err = store.SaveSnapshot(ctx, settings2, testVersion)
+	if err != nil {
+		t.Fatalf("Failed to save second snapshot: %v", err)
+	}
+
+	// Check that changes include the version
+	changes, err := store.GetChanges(ctx, 100)
+	if err != nil {
+		t.Fatalf("Failed to get changes: %v", err)
+	}
+
+	// Find our change
+	found := false
+	for _, c := range changes {
+		if c.Variable == "version.test.setting" {
+			found = true
+			if c.Version != testVersion {
+				t.Errorf("Expected version '%s', got '%s'", testVersion, c.Version)
+			}
+			break
+		}
+	}
+
+	if !found {
+		t.Error("Expected to find change for version.test.setting")
+	}
+}

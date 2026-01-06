@@ -94,7 +94,7 @@ func writeChangesCSV(w io.Writer, clusterID string, changes []storage.Change) er
 	defer csvWriter.Flush()
 
 	// Write header
-	header := []string{"cluster_id", "detected_at", "variable", "old_value", "new_value", "description"}
+	header := []string{"cluster_id", "detected_at", "variable", "version", "old_value", "new_value", "description"}
 	if err := csvWriter.Write(header); err != nil {
 		return err
 	}
@@ -105,6 +105,7 @@ func writeChangesCSV(w io.Writer, clusterID string, changes []storage.Change) er
 			clusterID,
 			c.DetectedAt.Format(time.RFC3339),
 			c.Variable,
+			c.Version,
 			c.OldValue,
 			c.NewValue,
 			c.Description,
