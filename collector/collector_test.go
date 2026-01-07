@@ -126,7 +126,7 @@ func TestCollect(t *testing.T) {
 		t.Fatalf("Failed to get snapshot: %v", err)
 	}
 
-	if snapshot == nil || len(snapshot) == 0 {
+	if len(snapshot) == 0 {
 		t.Error("Expected snapshot to have settings after collect()")
 	}
 
@@ -168,7 +168,7 @@ func TestStart(t *testing.T) {
 		t.Fatalf("Failed to get snapshot: %v", err)
 	}
 
-	if snapshot != nil && len(snapshot) > 0 {
+	if len(snapshot) > 0 {
 		t.Logf("Start() collected %d settings", len(snapshot))
 	}
 }

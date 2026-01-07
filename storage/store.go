@@ -270,14 +270,12 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting, version st
 	}
 
 	// Check for removed settings
-	if prevSettings != nil {
-		for variable, prev := range prevSettings {
-			if _, exists := currentSettings[variable]; !exists {
-				batch.Queue(
-					"INSERT INTO changes (detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6)",
-					now, variable, prev.Value, nil, prev.Description, version,
-				)
-			}
+	for variable, prev := range prevSettings {
+		if _, exists := currentSettings[variable]; !exists {
+			batch.Queue(
+				"INSERT INTO changes (detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6)",
+				now, variable, prev.Value, nil, prev.Description, version,
+			)
 		}
 	}
 

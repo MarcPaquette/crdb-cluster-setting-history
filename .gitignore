@@ -14,3 +14,9 @@ coverage.out
 .vscode/
 *.swp
 .DS_Store
+
+# Certificates and keys
+*.crt
+*.key
+*.pem
+certs/

@@ -76,7 +76,7 @@ func TestFullIntegration(t *testing.T) {
 		t.Fatalf("Failed to get latest snapshot: %v", err)
 	}
 
-	if snapshot == nil || len(snapshot) == 0 {
+	if len(snapshot) == 0 {
 		t.Fatal("Expected snapshot to have settings")
 	}
 
