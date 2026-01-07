@@ -4,6 +4,70 @@ A Go service that periodically collects CockroachDB cluster settings and tracks 
 
 ![CockroachDB Cluster Settings History](crdb-cluster-history-preview.png)
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Docker](#docker)
+- [Configuration](#configuration)
+- [Security](#security)
+- [Architecture](#architecture)
+- [Web Endpoints](#web-endpoints)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Quick Start
+
+### 1. Initialize the history database
+
+This creates a dedicated database and user for storing settings history:
+
+```bash
+# Connect with admin privileges
+export DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable"
+
+# For secure clusters, set a password
+export HISTORY_PASSWORD="your_secure_password"
+
+# Run initialization
+./crdb-cluster-history init
+```
+
+The init command will:
+- Create the `cluster_history` database
+- Create the `history_user` user
+- Grant necessary privileges
+- Detect insecure mode automatically (skips password in insecure mode)
+
+### 2. Run the service
+
+```bash
+# Connection to the cluster being monitored
+export DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable"
+
+# Connection to the history database
+export HISTORY_DATABASE_URL="postgresql://history_user@localhost:26257/cluster_history?sslmode=disable"
+
+# Start the service
+./crdb-cluster-history
+```
+
+Open http://localhost:8080 to view the changes dashboard.
+
+### 3. Export data (optional)
+
+Export all changes to a zipped CSV file:
+
+```bash
+./crdb-cluster-history export
+
+# Or specify output path
+./crdb-cluster-history export my-export.zip
+```
+
+The export includes the cluster ID from `crdb_internal.cluster_id()`.
+
 ## Features
 
 - Periodically collects `SHOW CLUSTER SETTINGS` from a CockroachDB cluster
@@ -77,57 +141,6 @@ podman-compose up -d
 # or
 podman compose up -d
 ```
-
-## Quick Start
-
-### 1. Initialize the history database
-
-This creates a dedicated database and user for storing settings history:
-
-```bash
-# Connect with admin privileges
-export DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable"
-
-# For secure clusters, set a password
-export HISTORY_PASSWORD="your_secure_password"
-
-# Run initialization
-./crdb-cluster-history init
-```
-
-The init command will:
-- Create the `cluster_history` database
-- Create the `history_user` user
-- Grant necessary privileges
-- Detect insecure mode automatically (skips password in insecure mode)
-
-### 2. Run the service
-
-```bash
-# Connection to the cluster being monitored
-export DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable"
-
-# Connection to the history database
-export HISTORY_DATABASE_URL="postgresql://history_user@localhost:26257/cluster_history?sslmode=disable"
-
-# Start the service
-./crdb-cluster-history
-```
-
-Open http://localhost:8080 to view the changes dashboard.
-
-### 3. Export data (optional)
-
-Export all changes to a zipped CSV file:
-
-```bash
-./crdb-cluster-history export
-
-# Or specify output path
-./crdb-cluster-history export my-export.zip
-```
-
-The export includes the cluster ID from `crdb_internal.cluster_id()`.
 
 ## Configuration
 
@@ -227,12 +240,12 @@ docker-compose -f docker-compose.secure.yml up -d
 │  CockroachDB    │────▶│  Collector   │────▶│  CockroachDB    │
 │  (monitored)    │     │  (periodic)  │     │  (history db)   │
 └─────────────────┘     └──────────────┘     └─────────────────┘
-                                                     │
-                                                     ▼
-                                             ┌─────────────┐
-                                             │  Web Server │
-                                             │  (diff UI)  │
-                                             └─────────────┘
+                                                    │
+                                                    ▼
+                                            ┌─────────────┐
+                                            │  Web Server │
+                                            │  (diff UI)  │
+                                            └─────────────┘
 ```
 
 ### Components
