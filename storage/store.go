@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"encoding/csv"
+	"io"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -371,4 +373,32 @@ func (s *Store) GetDatabaseVersion(ctx context.Context) (string, error) {
 // SetDatabaseVersion stores the database version.
 func (s *Store) SetDatabaseVersion(ctx context.Context, version string) error {
 	return s.SetMetadata(ctx, "database_version", version)
+}
+
+// WriteChangesCSV writes changes to a CSV format.
+func WriteChangesCSV(w io.Writer, clusterID string, changes []Change) error {
+	csvWriter := csv.NewWriter(w)
+	defer csvWriter.Flush()
+
+	header := []string{"cluster_id", "detected_at", "variable", "version", "old_value", "new_value", "description"}
+	if err := csvWriter.Write(header); err != nil {
+		return err
+	}
+
+	for _, c := range changes {
+		row := []string{
+			clusterID,
+			c.DetectedAt.Format(time.RFC3339),
+			c.Variable,
+			c.Version,
+			c.OldValue,
+			c.NewValue,
+			c.Description,
+		}
+		if err := csvWriter.Write(row); err != nil {
+			return err
+		}
+	}
+
+	return csvWriter.Error()
 }

@@ -43,9 +43,9 @@ func TestWriteChangesCSV(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := writeChangesCSV(&buf, "test-cluster-123", changes)
+	err := storage.WriteChangesCSV(&buf, "test-cluster-123", changes)
 	if err != nil {
-		t.Fatalf("writeChangesCSV failed: %v", err)
+		t.Fatalf("WriteChangesCSV failed: %v", err)
 	}
 
 	// Parse the CSV
@@ -85,9 +85,9 @@ func TestWriteChangesCSV(t *testing.T) {
 
 func TestWriteChangesCSVEmptyChanges(t *testing.T) {
 	var buf bytes.Buffer
-	err := writeChangesCSV(&buf, "test-cluster", []storage.Change{})
+	err := storage.WriteChangesCSV(&buf, "test-cluster", []storage.Change{})
 	if err != nil {
-		t.Fatalf("writeChangesCSV failed: %v", err)
+		t.Fatalf("WriteChangesCSV failed: %v", err)
 	}
 
 	// Parse the CSV - should still have header
@@ -194,9 +194,9 @@ func TestWriteChangesCSVWithVersion(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := writeChangesCSV(&buf, "cluster-with-version", changes)
+	err := storage.WriteChangesCSV(&buf, "cluster-with-version", changes)
 	if err != nil {
-		t.Fatalf("writeChangesCSV failed: %v", err)
+		t.Fatalf("WriteChangesCSV failed: %v", err)
 	}
 
 	// Parse the CSV

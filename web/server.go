@@ -3,7 +3,6 @@ package web
 import (
 	"archive/zip"
 	"embed"
-	"encoding/csv"
 	"fmt"
 	"html/template"
 	"log"
@@ -156,34 +155,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write CSV
-	csvWriter := csv.NewWriter(csvFile)
-
-	// Write header
-	header := []string{"cluster_id", "detected_at", "variable", "version", "old_value", "new_value", "description"}
-	if err := csvWriter.Write(header); err != nil {
-		log.Printf("Error writing CSV header: %v", err)
-		return
-	}
-
-	// Write rows
-	for _, c := range changes {
-		row := []string{
-			clusterID,
-			c.DetectedAt.Format(time.RFC3339),
-			c.Variable,
-			c.Version,
-			c.OldValue,
-			c.NewValue,
-			c.Description,
-		}
-		if err := csvWriter.Write(row); err != nil {
-			log.Printf("Error writing CSV row: %v", err)
-			return
-		}
-	}
-
-	csvWriter.Flush()
-	if err := csvWriter.Error(); err != nil {
-		log.Printf("CSV writer error: %v", err)
+	if err := storage.WriteChangesCSV(csvFile, clusterID, changes); err != nil {
+		log.Printf("Error writing CSV: %v", err)
 	}
 }

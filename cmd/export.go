@@ -3,9 +3,7 @@ package cmd
 import (
 	"archive/zip"
 	"context"
-	"encoding/csv"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"time"
@@ -81,39 +79,10 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 	}
 
 	// Write CSV
-	if err := writeChangesCSV(csvWriter, clusterID, changes); err != nil {
+	if err := storage.WriteChangesCSV(csvWriter, clusterID, changes); err != nil {
 		return fmt.Errorf("failed to write CSV: %w", err)
 	}
 
 	log.Printf("Exported %d changes to %s", len(changes), outputPath)
 	return nil
-}
-
-func writeChangesCSV(w io.Writer, clusterID string, changes []storage.Change) error {
-	csvWriter := csv.NewWriter(w)
-	defer csvWriter.Flush()
-
-	// Write header
-	header := []string{"cluster_id", "detected_at", "variable", "version", "old_value", "new_value", "description"}
-	if err := csvWriter.Write(header); err != nil {
-		return err
-	}
-
-	// Write rows
-	for _, c := range changes {
-		row := []string{
-			clusterID,
-			c.DetectedAt.Format(time.RFC3339),
-			c.Variable,
-			c.Version,
-			c.OldValue,
-			c.NewValue,
-			c.Description,
-		}
-		if err := csvWriter.Write(row); err != nil {
-			return err
-		}
-	}
-
-	return csvWriter.Error()
 }
