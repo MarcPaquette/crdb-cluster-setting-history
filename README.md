@@ -28,15 +28,6 @@ A Go service that periodically collects CockroachDB cluster settings and tracks 
 - CockroachDB cluster (the one being monitored)
 - Access to create a database and user for storing history
 
-## Build
-
-```bash
-go build -o crdb-cluster-history .
-
-# Or with version info
-go build -ldflags "-X main.Version=1.0.0" -o crdb-cluster-history .
-```
-
 ## Docker
 
 ### Quick Start with Docker Compose
@@ -222,49 +213,17 @@ CREATE TABLE metadata (
 );
 ```
 
-## Development
-
-### Run Tests
-
-```bash
-# Set up test database
-export DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable"
-export HISTORY_DATABASE_URL="postgresql://history_test_user@localhost:26257/cluster_history_test?sslmode=disable"
-
-# Run all tests
-go test -v ./...
-
-# Run with coverage
-go test -coverprofile=coverage.out ./...
-go tool cover -func=coverage.out
-```
-
-### Project Structure
-
-```
-crdb-cluster-history/
-├── main.go              # Entry point, CLI handling
-├── cmd/
-│   ├── init.go          # Database/user initialization
-│   └── export.go        # CLI export to CSV/zip
-├── collector/
-│   └── collector.go     # Periodic settings collection
-├── storage/
-│   └── store.go         # CockroachDB storage operations
-├── web/
-│   ├── server.go        # HTTP server (/, /health, /export endpoints)
-│   └── templates/
-│       └── index.html   # Web UI (search, download, dark/light mode)
-└── *_test.go            # Tests
-```
-
-### Web Endpoints
+## Web Endpoints
 
 | Endpoint | Description |
 |----------|-------------|
 | `/` | Main dashboard with changes table, search, and download button |
 | `/health` | Health check endpoint (returns "ok" if database is accessible) |
 | `/export` | Download changes as zipped CSV file |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build instructions, development setup, and release process.
 
 ## License
 
