@@ -28,6 +28,12 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// querier is an interface that both pgxpool.Pool and pgx.Tx implement.
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 func New(ctx context.Context, connString string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
@@ -153,40 +159,14 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 func (s *Store) GetLatestSnapshot(ctx context.Context) (map[string]Setting, error) {
-	var snapshotID int64
-	err := s.pool.QueryRow(ctx, "SELECT id FROM snapshots ORDER BY collected_at DESC LIMIT 1").Scan(&snapshotID)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	rows, err := s.pool.Query(ctx,
-		"SELECT variable, value, setting_type, description FROM settings WHERE snapshot_id = $1",
-		snapshotID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	settings := make(map[string]Setting)
-	for rows.Next() {
-		var setting Setting
-		if err := rows.Scan(&setting.Variable, &setting.Value, &setting.SettingType, &setting.Description); err != nil {
-			return nil, err
-		}
-		settings[setting.Variable] = setting
-	}
-
-	return settings, rows.Err()
+	return s.getLatestSnapshotWith(ctx, s.pool)
 }
 
-// getLatestSnapshotTx retrieves the latest snapshot within a transaction
-func (s *Store) getLatestSnapshotTx(ctx context.Context, tx pgx.Tx) (map[string]Setting, error) {
+// getLatestSnapshotWith retrieves the latest snapshot using the provided querier.
+// This allows the same logic to be used with either a pool or a transaction.
+func (s *Store) getLatestSnapshotWith(ctx context.Context, q querier) (map[string]Setting, error) {
 	var snapshotID int64
-	err := tx.QueryRow(ctx, "SELECT id FROM snapshots ORDER BY collected_at DESC LIMIT 1").Scan(&snapshotID)
+	err := q.QueryRow(ctx, "SELECT id FROM snapshots ORDER BY collected_at DESC LIMIT 1").Scan(&snapshotID)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -194,7 +174,7 @@ func (s *Store) getLatestSnapshotTx(ctx context.Context, tx pgx.Tx) (map[string]
 		return nil, err
 	}
 
-	rows, err := tx.Query(ctx,
+	rows, err := q.Query(ctx,
 		"SELECT variable, value, setting_type, description FROM settings WHERE snapshot_id = $1",
 		snapshotID,
 	)
@@ -225,7 +205,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting, version st
 	now := time.Now()
 
 	// Get previous settings for comparison (inside transaction to avoid race condition)
-	prevSettings, err := s.getLatestSnapshotTx(ctx, tx)
+	prevSettings, err := s.getLatestSnapshotWith(ctx, tx)
 	if err != nil {
 		return err
 	}

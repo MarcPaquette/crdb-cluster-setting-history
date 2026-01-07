@@ -85,34 +85,29 @@ func checkCredentials(username, password string, cfg Config) bool {
 	return usernameMatch && passwordMatch
 }
 
-// ParseAPIKeys parses a comma-separated list of API keys.
-func ParseAPIKeys(keys string) []string {
-	if keys == "" {
-		return nil
+// parseCommaSeparated parses a comma-separated string into a slice.
+// If the input is empty, it returns the provided default value.
+func parseCommaSeparated(s string, defaultValue []string) []string {
+	if s == "" {
+		return defaultValue
 	}
-	parts := strings.Split(keys, ",")
+	parts := strings.Split(s, ",")
 	result := make([]string, 0, len(parts))
-	for _, key := range parts {
-		key = strings.TrimSpace(key)
-		if key != "" {
-			result = append(result, key)
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
 		}
 	}
 	return result
 }
 
+// ParseAPIKeys parses a comma-separated list of API keys.
+func ParseAPIKeys(keys string) []string {
+	return parseCommaSeparated(keys, nil)
+}
+
 // ParsePublicPaths parses a comma-separated list of public paths.
 func ParsePublicPaths(paths string) []string {
-	if paths == "" {
-		return []string{"/health"}
-	}
-	parts := strings.Split(paths, ",")
-	result := make([]string, 0, len(parts))
-	for _, path := range parts {
-		path = strings.TrimSpace(path)
-		if path != "" {
-			result = append(result, path)
-		}
-	}
-	return result
+	return parseCommaSeparated(paths, []string{"/health"})
 }
