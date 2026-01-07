@@ -1,0 +1,89 @@
+version: '3.8'
+
+# Secure deployment configuration with TLS and authentication
+# Usage:
+#   1. Generate certificates: ./scripts/generate-certs.sh
+#   2. Copy .env.example to .env and set passwords
+#   3. Run: docker-compose -f docker-compose.secure.yml up -d
+
+services:
+  # CockroachDB single-node cluster with TLS
+  cockroachdb:
+    image: cockroachdb/cockroach:v23.2.0
+    command: start-single-node --certs-dir=/certs --advertise-addr=cockroachdb
+    ports:
+      - "26257:26257"  # SQL port
+      - "8081:8080"    # Admin UI (mapped to 8081 to avoid conflict)
+    volumes:
+      - cockroach-data:/cockroach/cockroach-data
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # Initialize the history database (runs once)
+  init:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    command: init
+    environment:
+      DATABASE_URL: postgresql://root@cockroachdb:26257/defaultdb?sslmode=verify-full&sslrootcert=/certs/ca.crt&sslcert=/certs/client.root.crt&sslkey=/certs/client.root.key
+      HISTORY_DB_NAME: cluster_history
+      HISTORY_USERNAME: history_user
+      HISTORY_PASSWORD: ${HISTORY_PASSWORD}
+    volumes:
+      - ./certs:/certs:ro
+    depends_on:
+      cockroachdb:
+        condition: service_healthy
+
+  # Cluster history service with security features
+  crdb-cluster-history:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    ports:
+      - "8080:8080"
+    environment:
+      # Database connections with TLS
+      DATABASE_URL: postgresql://root@cockroachdb:26257/defaultdb?sslmode=verify-full&sslrootcert=/certs/ca.crt&sslcert=/certs/client.root.crt&sslkey=/certs/client.root.key
+      HISTORY_DATABASE_URL: postgresql://history_user:${HISTORY_PASSWORD}@cockroachdb:26257/cluster_history?sslmode=verify-full&sslrootcert=/certs/ca.crt
+      POLL_INTERVAL: 1m
+      HTTP_PORT: "8080"
+
+      # Authentication (required)
+      AUTH_ENABLED: "true"
+      AUTH_USERNAME: ${AUTH_USERNAME:-admin}
+      AUTH_PASSWORD: ${AUTH_PASSWORD}
+      AUTH_API_KEYS: ${AUTH_API_KEYS:-}
+
+      # TLS for web server (optional, enable if you have web server certs)
+      # TLS_ENABLED: "true"
+      # TLS_CERT_FILE: /certs/node.crt
+      # TLS_KEY_FILE: /certs/node.key
+
+      # Rate limiting
+      RATE_LIMIT_ENABLED: "true"
+      RATE_LIMIT_RPS: "10"
+      RATE_LIMIT_BURST: "20"
+
+      # Sensitive data redaction
+      REDACT_SENSITIVE: "true"
+      REDACT_PATTERNS: ${REDACT_PATTERNS:-}
+
+      # RETENTION: 720h  # Uncomment to enable 30-day retention
+    volumes:
+      - ./certs:/certs:ro
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  cockroach-data:

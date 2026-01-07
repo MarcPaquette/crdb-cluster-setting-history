@@ -28,6 +28,12 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 	insecureMode := isInsecureMode(ctx, conn)
 	if insecureMode {
 		log.Printf("Detected insecure mode - passwords will not be set")
+		log.Printf("")
+		log.Printf("WARNING: Insecure mode is not recommended for production!")
+		log.Printf("  - Database connections are not encrypted")
+		log.Printf("  - Authentication may be bypassed")
+		log.Printf("  - For production, enable TLS with: cockroach start --certs-dir=...")
+		log.Printf("")
 	}
 
 	// Create database

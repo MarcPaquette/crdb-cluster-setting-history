@@ -16,21 +16,40 @@ import (
 //go:embed templates/*
 var templateFS embed.FS
 
+// Server handles HTTP requests for the web UI.
 type Server struct {
-	store *storage.Store
-	tmpl  *template.Template
+	store    *storage.Store
+	tmpl     *template.Template
+	redactor *storage.Redactor
 }
 
-func New(store *storage.Store) (*Server, error) {
+// Option configures the Server.
+type Option func(*Server)
+
+// WithRedactor sets the redactor for sensitive data.
+func WithRedactor(r *storage.Redactor) Option {
+	return func(s *Server) {
+		s.redactor = r
+	}
+}
+
+// New creates a new web server.
+func New(store *storage.Store, opts ...Option) (*Server, error) {
 	tmpl, err := template.ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
 
-	return &Server{
+	s := &Server{
 		store: store,
 		tmpl:  tmpl,
-	}, nil
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -60,6 +79,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error getting changes: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	// Apply redaction if configured
+	if s.redactor != nil {
+		changes = s.redactor.RedactChanges(changes)
 	}
 
 	clusterID, err := s.store.GetClusterID(ctx)
@@ -99,6 +123,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error getting changes for export: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	// Apply redaction if configured
+	if s.redactor != nil {
+		changes = s.redactor.RedactChanges(changes)
 	}
 
 	// Get cluster ID for filename and CSV

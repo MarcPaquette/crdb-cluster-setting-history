@@ -144,6 +144,24 @@ The export includes the cluster ID from `crdb_internal.cluster_id()`.
 | `HISTORY_USERNAME` | init | Username to create | `history_user` |
 | `HISTORY_PASSWORD` | init | Password for user (optional in insecure mode) | - |
 
+### Security Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AUTH_ENABLED` | Enable authentication | `false` |
+| `AUTH_USERNAME` | Username for Basic Auth | `admin` |
+| `AUTH_PASSWORD` | Password for Basic Auth (required if AUTH_ENABLED=true) | - |
+| `AUTH_API_KEYS` | Comma-separated API keys for X-API-Key header auth | - |
+| `AUTH_PUBLIC_PATHS` | Comma-separated paths that don't require auth | `/health` |
+| `TLS_ENABLED` | Enable HTTPS | `false` |
+| `TLS_CERT_FILE` | Path to TLS certificate file | - |
+| `TLS_KEY_FILE` | Path to TLS private key file | - |
+| `RATE_LIMIT_ENABLED` | Enable rate limiting | `false` |
+| `RATE_LIMIT_RPS` | Requests per second per IP | `10` |
+| `RATE_LIMIT_BURST` | Burst capacity | `20` |
+| `REDACT_SENSITIVE` | Redact sensitive setting values | `false` |
+| `REDACT_PATTERNS` | Additional patterns to redact (comma-separated) | - |
+
 ### Poll Interval Examples
 
 ```bash
@@ -153,6 +171,54 @@ export POLL_INTERVAL="1h"    # Every hour
 export POLL_INTERVAL="24h"   # Daily
 export POLL_INTERVAL="720h"  # Monthly (30 days)
 ```
+
+## Security
+
+### Secure Deployment
+
+For production deployments, enable security features:
+
+```bash
+# Enable authentication
+export AUTH_ENABLED=true
+export AUTH_USERNAME=admin
+export AUTH_PASSWORD=your_secure_password
+
+# Optional: Enable TLS
+export TLS_ENABLED=true
+export TLS_CERT_FILE=/path/to/cert.pem
+export TLS_KEY_FILE=/path/to/key.pem
+
+# Optional: Enable rate limiting
+export RATE_LIMIT_ENABLED=true
+
+# Optional: Redact sensitive settings
+export REDACT_SENSITIVE=true
+```
+
+### Secure Docker Deployment
+
+Use `docker-compose.secure.yml` for production:
+
+```bash
+# Generate CockroachDB certificates
+./scripts/generate-certs.sh
+
+# Create .env file with passwords
+cp .env.example .env
+# Edit .env to set secure passwords
+
+# Start with secure configuration
+docker-compose -f docker-compose.secure.yml up -d
+```
+
+### Security Features
+
+- **Authentication**: HTTP Basic Auth and API key support
+- **HTTPS/TLS**: Optional TLS encryption for web traffic
+- **Security Headers**: CSP, X-Frame-Options, HSTS, etc.
+- **Rate Limiting**: Per-IP request rate limiting
+- **Sensitive Data Redaction**: Automatically redacts passwords, secrets, keys, and tokens
 
 ## Architecture
 

@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"crdb-cluster-history/auth"
 	"crdb-cluster-history/cmd"
 	"crdb-cluster-history/collector"
 	"crdb-cluster-history/storage"
@@ -117,6 +120,54 @@ func runServer() {
 	retention := getEnvDuration("RETENTION", 0) // 0 means no cleanup
 	httpPort := getEnv("HTTP_PORT", "8080")
 
+	// Security configuration
+	tlsEnabled := getEnvBool("TLS_ENABLED", false)
+	tlsCertFile := os.Getenv("TLS_CERT_FILE")
+	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
+
+	// Authentication configuration
+	authEnabled := getEnvBool("AUTH_ENABLED", false)
+	authCfg := auth.Config{
+		Enabled:     authEnabled,
+		Username:    getEnv("AUTH_USERNAME", "admin"),
+		APIKeys:     auth.ParseAPIKeys(os.Getenv("AUTH_API_KEYS")),
+		PublicPaths: auth.ParsePublicPaths(os.Getenv("AUTH_PUBLIC_PATHS")),
+	}
+
+	if authEnabled {
+		password := os.Getenv("AUTH_PASSWORD")
+		if password == "" {
+			log.Fatal("AUTH_PASSWORD is required when AUTH_ENABLED=true")
+		}
+		hash, err := auth.HashPassword(password)
+		if err != nil {
+			log.Fatalf("Failed to hash password: %v", err)
+		}
+		authCfg.PasswordHash = hash
+		log.Printf("Authentication enabled (user: %s)", authCfg.Username)
+	}
+
+	// Rate limiting configuration
+	rateLimitEnabled := getEnvBool("RATE_LIMIT_ENABLED", false)
+	rateLimiter := web.NewRateLimiter(web.RateLimiterConfig{
+		Enabled:           rateLimitEnabled,
+		RequestsPerSecond: getEnvFloat("RATE_LIMIT_RPS", 10),
+		Burst:             getEnvInt("RATE_LIMIT_BURST", 20),
+	})
+	if rateLimitEnabled {
+		log.Printf("Rate limiting enabled (%.1f req/s, burst %d)", getEnvFloat("RATE_LIMIT_RPS", 10), getEnvInt("RATE_LIMIT_BURST", 20))
+	}
+
+	// Redaction configuration
+	redactCfg := storage.RedactorConfig{
+		Enabled:            getEnvBool("REDACT_SENSITIVE", false),
+		AdditionalPatterns: os.Getenv("REDACT_PATTERNS"),
+	}
+	redactor := storage.NewRedactor(redactCfg)
+	if redactCfg.Enabled {
+		log.Printf("Sensitive data redaction enabled")
+	}
+
 	// Create context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -128,8 +179,8 @@ func runServer() {
 	}
 	defer store.Close()
 
-	// Initialize web server
-	webServer, err := web.New(store)
+	// Initialize web server with redactor
+	webServer, err := web.New(store, web.WithRedactor(redactor))
 	if err != nil {
 		log.Fatalf("Failed to initialize web server: %v", err)
 	}
@@ -148,16 +199,44 @@ func runServer() {
 
 	go coll.Start(ctx)
 
-	// Start HTTP server
+	// Build handler with middleware chain
+	handler := web.ChainMiddleware(
+		webServer.Handler(),
+		auth.Middleware(authCfg),
+		rateLimiter.Middleware,
+		web.SecurityHeaders(tlsEnabled),
+	)
+
+	// Start HTTP(S) server with security timeouts
 	server := &http.Server{
-		Addr:    ":" + httpPort,
-		Handler: webServer.Handler(),
+		Addr:              ":" + httpPort,
+		Handler:           handler,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	if tlsEnabled {
+		if tlsCertFile == "" || tlsKeyFile == "" {
+			log.Fatal("TLS_CERT_FILE and TLS_KEY_FILE are required when TLS_ENABLED=true")
+		}
+		server.TLSConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
 	}
 
 	go func() {
-		log.Printf("Starting web server on http://localhost:%s", httpPort)
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+		if tlsEnabled {
+			log.Printf("Starting HTTPS server on https://localhost:%s", httpPort)
+			if err := server.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != http.ErrServerClosed {
+				log.Fatalf("HTTPS server error: %v", err)
+			}
+		} else {
+			log.Printf("Starting HTTP server on http://localhost:%s", httpPort)
+			if err := server.ListenAndServe(); err != http.ErrServerClosed {
+				log.Fatalf("HTTP server error: %v", err)
+			}
 		}
 	}()
 
@@ -197,6 +276,24 @@ Environment Variables:
   HISTORY_DB_NAME       Database name to create (default: cluster_history)
   HISTORY_USERNAME      Username to create (default: history_user)
   HISTORY_PASSWORD      Password for the new user (optional in insecure mode)
+
+Security:
+  AUTH_ENABLED          Enable authentication (default: false)
+  AUTH_USERNAME         Username for Basic Auth (default: admin)
+  AUTH_PASSWORD         Password for Basic Auth (required if AUTH_ENABLED=true)
+  AUTH_API_KEYS         Comma-separated API keys for X-API-Key header auth
+  AUTH_PUBLIC_PATHS     Comma-separated public paths (default: /health)
+
+  TLS_ENABLED           Enable HTTPS (default: false)
+  TLS_CERT_FILE         Path to TLS certificate file
+  TLS_KEY_FILE          Path to TLS private key file
+
+  RATE_LIMIT_ENABLED    Enable rate limiting (default: false)
+  RATE_LIMIT_RPS        Requests per second per IP (default: 10)
+  RATE_LIMIT_BURST      Burst capacity (default: 20)
+
+  REDACT_SENSITIVE      Redact sensitive setting values (default: false)
+  REDACT_PATTERNS       Additional patterns to redact (comma-separated)
 `, os.Args[0])
 }
 
@@ -215,6 +312,42 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 			return defaultValue
 		}
 		return d
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			log.Printf("Invalid bool for %s: %v, using default", key, err)
+			return defaultValue
+		}
+		return b
+	}
+	return defaultValue
+}
+
+func getEnvFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		f, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			log.Printf("Invalid float for %s: %v, using default", key, err)
+			return defaultValue
+		}
+		return f
+	}
+	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		i, err := strconv.Atoi(value)
+		if err != nil {
+			log.Printf("Invalid int for %s: %v, using default", key, err)
+			return defaultValue
+		}
+		return i
 	}
 	return defaultValue
 }
