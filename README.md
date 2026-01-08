@@ -74,6 +74,7 @@ The export includes the cluster ID from `crdb_internal.cluster_id()`.
 - Stores snapshots in a separate CockroachDB database for history
 - Detects and records changes (modified, added, removed settings)
 - Tracks database version at the time of each change
+- **Annotations**: Add notes to changes explaining why settings were modified (e.g., "Increased buffer size due to OOM - JIRA-1234")
 - Web UI displays a table of changes with timestamps, version, and old/new values
 - Real-time search filter to quickly find settings
 - Download CSV button to export changes directly from the web UI
@@ -284,6 +285,17 @@ CREATE TABLE changes (
     version TEXT  -- Database version at time of change (e.g., "v25.4.2")
 );
 
+-- User annotations/comments on changes
+CREATE TABLE annotations (
+    id SERIAL PRIMARY KEY,
+    change_id INT NOT NULL UNIQUE REFERENCES changes(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by TEXT,
+    updated_at TIMESTAMPTZ
+);
+
 -- Key-value metadata (cluster_id, database_version, etc.)
 CREATE TABLE metadata (
     key TEXT PRIMARY KEY,
@@ -294,11 +306,15 @@ CREATE TABLE metadata (
 
 ## Web Endpoints
 
-| Endpoint | Description |
-|----------|-------------|
-| `/` | Main dashboard with changes table, search, and download button |
-| `/health` | Health check endpoint (returns "ok" if database is accessible) |
-| `/export` | Download changes as zipped CSV file |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Main dashboard with changes table, search, and download button |
+| `/health` | GET | Health check endpoint (returns "ok" if database is accessible) |
+| `/export` | GET | Download changes as zipped CSV file |
+| `/api/annotations` | POST | Create a new annotation for a change |
+| `/api/annotations/{id}` | GET | Retrieve an annotation |
+| `/api/annotations/{id}` | PUT | Update an annotation |
+| `/api/annotations/{id}` | DELETE | Delete an annotation |
 
 ## Contributing
 
