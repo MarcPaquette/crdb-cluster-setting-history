@@ -1,6 +1,8 @@
 # Build artifacts
 crdb-cluster-history
 *.exe
+*.test
+*.test.exe
 
 # Export files
 crdb-cluster-history-export-*.zip
@@ -8,15 +10,29 @@ crdb-cluster-history-export-*.zip
 
 # Coverage
 coverage.out
+coverage.html
 
 # IDE
 .idea/
 .vscode/
 *.swp
+*~
 .DS_Store
+Thumbs.db
 
 # Certificates and keys
 *.crt
 *.key
 *.pem
 certs/
+
+# Environment
+.env
+.env.*
+
+# Claude Code
+.claude/
+
+# Temporary files
+*.tmp
+*.log
