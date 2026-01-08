@@ -26,6 +26,24 @@ type Change struct {
 	Version     string
 }
 
+// Annotation represents a user comment on a specific change.
+type Annotation struct {
+	ID        int64
+	ChangeID  int64
+	Content   string
+	CreatedBy string
+	CreatedAt time.Time
+	UpdatedBy string    // Empty if never updated
+	UpdatedAt time.Time // Zero value if never updated
+}
+
+// ChangeWithAnnotation combines a Change with its ID and optional Annotation.
+type ChangeWithAnnotation struct {
+	Change
+	ID         int64       // The change ID (needed for annotation operations)
+	Annotation *Annotation // nil if no annotation exists
+}
+
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -152,6 +170,36 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 
 	if !hasVersionColumn {
 		_, err = pool.Exec(ctx, "ALTER TABLE changes ADD COLUMN version TEXT")
+		if err != nil {
+			return err
+		}
+	}
+
+	// Add annotations table if it doesn't exist
+	var hasAnnotationsTable bool
+	err = pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_name = 'annotations'
+		)
+	`).Scan(&hasAnnotationsTable)
+	if err != nil {
+		return err
+	}
+
+	if !hasAnnotationsTable {
+		_, err = pool.Exec(ctx, `
+			CREATE TABLE annotations (
+				id SERIAL PRIMARY KEY,
+				change_id INT NOT NULL UNIQUE REFERENCES changes(id) ON DELETE CASCADE,
+				content TEXT NOT NULL,
+				created_by TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				updated_by TEXT,
+				updated_at TIMESTAMPTZ
+			);
+			CREATE INDEX idx_annotations_change_id ON annotations(change_id);
+		`)
 		if err != nil {
 			return err
 		}
@@ -401,4 +449,169 @@ func WriteChangesCSV(w io.Writer, clusterID string, changes []Change) error {
 	}
 
 	return csvWriter.Error()
+}
+
+// CreateAnnotation creates a new annotation for a change.
+// Returns the created annotation with its ID populated.
+func (s *Store) CreateAnnotation(ctx context.Context, changeID int64, content, createdBy string) (*Annotation, error) {
+	var a Annotation
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO annotations (change_id, content, created_by, created_at)
+		 VALUES ($1, $2, $3, NOW())
+		 RETURNING id, change_id, content, created_by, created_at`,
+		changeID, content, createdBy,
+	).Scan(&a.ID, &a.ChangeID, &a.Content, &a.CreatedBy, &a.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// GetAnnotation retrieves an annotation by its ID.
+func (s *Store) GetAnnotation(ctx context.Context, id int64) (*Annotation, error) {
+	var a Annotation
+	var updatedBy *string
+	var updatedAt *time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, change_id, content, created_by, created_at, updated_by, updated_at
+		 FROM annotations WHERE id = $1`,
+		id,
+	).Scan(&a.ID, &a.ChangeID, &a.Content, &a.CreatedBy, &a.CreatedAt, &updatedBy, &updatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if updatedBy != nil {
+		a.UpdatedBy = *updatedBy
+	}
+	if updatedAt != nil {
+		a.UpdatedAt = *updatedAt
+	}
+	return &a, nil
+}
+
+// GetAnnotationByChangeID retrieves an annotation for a specific change.
+func (s *Store) GetAnnotationByChangeID(ctx context.Context, changeID int64) (*Annotation, error) {
+	var a Annotation
+	var updatedBy *string
+	var updatedAt *time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, change_id, content, created_by, created_at, updated_by, updated_at
+		 FROM annotations WHERE change_id = $1`,
+		changeID,
+	).Scan(&a.ID, &a.ChangeID, &a.Content, &a.CreatedBy, &a.CreatedAt, &updatedBy, &updatedAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if updatedBy != nil {
+		a.UpdatedBy = *updatedBy
+	}
+	if updatedAt != nil {
+		a.UpdatedAt = *updatedAt
+	}
+	return &a, nil
+}
+
+// UpdateAnnotation updates an existing annotation.
+func (s *Store) UpdateAnnotation(ctx context.Context, id int64, content, updatedBy string) error {
+	result, err := s.pool.Exec(ctx,
+		`UPDATE annotations SET content = $1, updated_by = $2, updated_at = NOW()
+		 WHERE id = $3`,
+		content, updatedBy, id,
+	)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// DeleteAnnotation removes an annotation.
+func (s *Store) DeleteAnnotation(ctx context.Context, id int64) error {
+	result, err := s.pool.Exec(ctx,
+		`DELETE FROM annotations WHERE id = $1`,
+		id,
+	)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// GetChangesWithAnnotations retrieves changes with their annotations using a LEFT JOIN.
+func (s *Store) GetChangesWithAnnotations(ctx context.Context, limit int) ([]ChangeWithAnnotation, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT c.id, c.detected_at, c.variable, c.old_value, c.new_value, c.description, c.version,
+		        a.id, a.content, a.created_by, a.created_at, a.updated_by, a.updated_at
+		 FROM changes c
+		 LEFT JOIN annotations a ON a.change_id = c.id
+		 ORDER BY c.detected_at DESC
+		 LIMIT $1`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []ChangeWithAnnotation
+	for rows.Next() {
+		var cwa ChangeWithAnnotation
+		var oldValue, newValue, description, version *string
+		var annID *int64
+		var annContent, annCreatedBy, annUpdatedBy *string
+		var annCreatedAt, annUpdatedAt *time.Time
+
+		err := rows.Scan(
+			&cwa.ID, &cwa.DetectedAt, &cwa.Variable, &oldValue, &newValue, &description, &version,
+			&annID, &annContent, &annCreatedBy, &annCreatedAt, &annUpdatedBy, &annUpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if oldValue != nil {
+			cwa.OldValue = *oldValue
+		}
+		if newValue != nil {
+			cwa.NewValue = *newValue
+		}
+		if description != nil {
+			cwa.Description = *description
+		}
+		if version != nil {
+			cwa.Version = *version
+		}
+
+		// Only populate annotation if it exists
+		if annID != nil {
+			cwa.Annotation = &Annotation{
+				ID:        *annID,
+				ChangeID:  cwa.ID,
+				Content:   *annContent,
+				CreatedBy: *annCreatedBy,
+				CreatedAt: *annCreatedAt,
+			}
+			if annUpdatedBy != nil {
+				cwa.Annotation.UpdatedBy = *annUpdatedBy
+			}
+			if annUpdatedAt != nil {
+				cwa.Annotation.UpdatedAt = *annUpdatedAt
+			}
+		}
+
+		results = append(results, cwa)
+	}
+
+	return results, rows.Err()
 }

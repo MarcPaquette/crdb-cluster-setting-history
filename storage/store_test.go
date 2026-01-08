@@ -24,6 +24,7 @@ func cleanupTestData(t *testing.T, store *Store) {
 	defer cancel()
 
 	// Delete in order to respect foreign keys (or CASCADE handles it)
+	store.pool.Exec(ctx, "DELETE FROM annotations")
 	store.pool.Exec(ctx, "DELETE FROM changes")
 	store.pool.Exec(ctx, "DELETE FROM settings")
 	store.pool.Exec(ctx, "DELETE FROM snapshots")
@@ -509,5 +510,275 @@ func TestChangeWithVersion(t *testing.T) {
 
 	if !found {
 		t.Error("Expected to find change for version.test.setting")
+	}
+}
+
+func TestAnnotationCRUD(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Clean up and create a change to annotate
+	cleanupTestData(t, store)
+	settings1 := []Setting{{Variable: "annotation.test", Value: "v1", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, settings1, "v1.0")
+	settings2 := []Setting{{Variable: "annotation.test", Value: "v2", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, settings2, "v1.0")
+
+	changes, err := store.GetChangesWithAnnotations(ctx, 1)
+	if err != nil {
+		t.Fatalf("Failed to get changes: %v", err)
+	}
+	if len(changes) == 0 {
+		t.Fatal("No changes found")
+	}
+	changeID := changes[0].ID
+
+	// Test Create
+	ann, err := store.CreateAnnotation(ctx, changeID, "Test note", "testuser")
+	if err != nil {
+		t.Fatalf("CreateAnnotation failed: %v", err)
+	}
+	if ann.ID == 0 {
+		t.Error("Expected non-zero annotation ID")
+	}
+	if ann.Content != "Test note" {
+		t.Errorf("Expected content 'Test note', got '%s'", ann.Content)
+	}
+	if ann.CreatedBy != "testuser" {
+		t.Errorf("Expected createdBy 'testuser', got '%s'", ann.CreatedBy)
+	}
+	if ann.CreatedAt.IsZero() {
+		t.Error("Expected non-zero created_at")
+	}
+
+	// Test Get by ID
+	retrieved, err := store.GetAnnotation(ctx, ann.ID)
+	if err != nil {
+		t.Fatalf("GetAnnotation failed: %v", err)
+	}
+	if retrieved == nil {
+		t.Fatal("Expected annotation, got nil")
+	}
+	if retrieved.Content != "Test note" {
+		t.Errorf("Expected content 'Test note', got '%s'", retrieved.Content)
+	}
+
+	// Test GetByChangeID
+	byChange, err := store.GetAnnotationByChangeID(ctx, changeID)
+	if err != nil {
+		t.Fatalf("GetAnnotationByChangeID failed: %v", err)
+	}
+	if byChange == nil || byChange.ID != ann.ID {
+		t.Error("GetAnnotationByChangeID returned wrong annotation")
+	}
+
+	// Test Update
+	err = store.UpdateAnnotation(ctx, ann.ID, "Updated note", "otheruser")
+	if err != nil {
+		t.Fatalf("UpdateAnnotation failed: %v", err)
+	}
+	updated, _ := store.GetAnnotation(ctx, ann.ID)
+	if updated.Content != "Updated note" {
+		t.Errorf("Expected updated content, got '%s'", updated.Content)
+	}
+	if updated.UpdatedBy != "otheruser" {
+		t.Errorf("Expected updatedBy 'otheruser', got '%s'", updated.UpdatedBy)
+	}
+	if updated.UpdatedAt.IsZero() {
+		t.Error("Expected non-zero updated_at after update")
+	}
+
+	// Test Delete
+	err = store.DeleteAnnotation(ctx, ann.ID)
+	if err != nil {
+		t.Fatalf("DeleteAnnotation failed: %v", err)
+	}
+	deleted, _ := store.GetAnnotation(ctx, ann.ID)
+	if deleted != nil {
+		t.Error("Expected nil after delete")
+	}
+}
+
+func TestAnnotationNotFound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Get non-existent annotation should return nil, not error
+	ann, err := store.GetAnnotation(ctx, 999999)
+	if err != nil {
+		t.Fatalf("GetAnnotation should not error for missing: %v", err)
+	}
+	if ann != nil {
+		t.Error("Expected nil for non-existent annotation")
+	}
+
+	// Update non-existent should return ErrNoRows
+	err = store.UpdateAnnotation(ctx, 999999, "content", "user")
+	if err == nil {
+		t.Error("Expected error for updating non-existent annotation")
+	}
+
+	// Delete non-existent should return ErrNoRows
+	err = store.DeleteAnnotation(ctx, 999999)
+	if err == nil {
+		t.Error("Expected error for deleting non-existent annotation")
+	}
+}
+
+func TestAnnotationCascadeDelete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Create change and annotation
+	cleanupTestData(t, store)
+	settings1 := []Setting{{Variable: "cascade.test", Value: "v1", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, settings1, "v1.0")
+	settings2 := []Setting{{Variable: "cascade.test", Value: "v2", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, settings2, "v1.0")
+
+	changes, _ := store.GetChangesWithAnnotations(ctx, 1)
+	if len(changes) == 0 {
+		t.Fatal("No changes found")
+	}
+	changeID := changes[0].ID
+	ann, err := store.CreateAnnotation(ctx, changeID, "Will be deleted", "user")
+	if err != nil {
+		t.Fatalf("Failed to create annotation: %v", err)
+	}
+
+	// Delete all changes
+	store.CleanupOldChanges(ctx, 0)
+
+	// Annotation should be gone too
+	retrieved, _ := store.GetAnnotation(ctx, ann.ID)
+	if retrieved != nil {
+		t.Error("Expected annotation to be deleted with change")
+	}
+}
+
+func TestGetChangesWithAnnotations(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	cleanupTestData(t, store)
+
+	// Create changes
+	settings1 := []Setting{{Variable: "join.test.a", Value: "v1", SettingType: "s", Description: "Test A"}}
+	store.SaveSnapshot(ctx, settings1, "v1.0")
+	settings2 := []Setting{
+		{Variable: "join.test.a", Value: "v2", SettingType: "s", Description: "Test A"},
+		{Variable: "join.test.b", Value: "x1", SettingType: "s", Description: "Test B"},
+	}
+	store.SaveSnapshot(ctx, settings2, "v1.0")
+	settings3 := []Setting{
+		{Variable: "join.test.a", Value: "v2", SettingType: "s", Description: "Test A"},
+		{Variable: "join.test.b", Value: "x2", SettingType: "s", Description: "Test B"},
+	}
+	store.SaveSnapshot(ctx, settings3, "v1.0")
+
+	changes, err := store.GetChangesWithAnnotations(ctx, 10)
+	if err != nil {
+		t.Fatalf("Failed to get changes with annotations: %v", err)
+	}
+	if len(changes) < 2 {
+		t.Fatalf("Expected at least 2 changes, got %d", len(changes))
+	}
+
+	// Verify all changes have IDs
+	for i, c := range changes {
+		if c.ID == 0 {
+			t.Errorf("Change %d has zero ID", i)
+		}
+	}
+
+	// Add annotation to first change only
+	_, err = store.CreateAnnotation(ctx, changes[0].ID, "First change note", "user")
+	if err != nil {
+		t.Fatalf("Failed to create annotation: %v", err)
+	}
+
+	// Re-fetch
+	changes, err = store.GetChangesWithAnnotations(ctx, 10)
+	if err != nil {
+		t.Fatalf("Failed to get changes with annotations: %v", err)
+	}
+
+	// Verify first change has annotation, others don't
+	foundWithAnn := false
+	foundWithoutAnn := false
+	for _, c := range changes {
+		if c.Annotation != nil && c.Annotation.Content == "First change note" {
+			foundWithAnn = true
+			if c.Annotation.ChangeID != c.ID {
+				t.Errorf("Annotation changeID %d doesn't match change ID %d", c.Annotation.ChangeID, c.ID)
+			}
+		} else if c.Annotation == nil {
+			foundWithoutAnn = true
+		}
+	}
+	if !foundWithAnn {
+		t.Error("Expected to find change with annotation")
+	}
+	if !foundWithoutAnn {
+		t.Error("Expected to find change without annotation")
+	}
+}
+
+func TestAnnotationDuplicateFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	cleanupTestData(t, store)
+	settings1 := []Setting{{Variable: "dup.test", Value: "v1", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, settings1, "v1.0")
+	settings2 := []Setting{{Variable: "dup.test", Value: "v2", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, settings2, "v1.0")
+
+	changes, _ := store.GetChangesWithAnnotations(ctx, 1)
+	if len(changes) == 0 {
+		t.Fatal("No changes found")
+	}
+	changeID := changes[0].ID
+
+	// First annotation should succeed
+	_, err = store.CreateAnnotation(ctx, changeID, "First", "user")
+	if err != nil {
+		t.Fatalf("First CreateAnnotation failed: %v", err)
+	}
+
+	// Second annotation for same change should fail (UNIQUE constraint)
+	_, err = store.CreateAnnotation(ctx, changeID, "Second", "user")
+	if err == nil {
+		t.Error("Expected error for duplicate annotation on same change")
 	}
 }

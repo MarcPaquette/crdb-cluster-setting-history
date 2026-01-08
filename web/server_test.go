@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -446,4 +447,347 @@ func TestHandleExportWithClusterID(t *testing.T) {
 	if !strings.Contains(csvFile.Name, testClusterID) {
 		t.Errorf("Expected CSV filename to contain cluster ID, got %s", csvFile.Name)
 	}
+}
+
+// cleanupAnnotationTestData cleans up test data for annotation tests
+func cleanupAnnotationTestData(t *testing.T, store *storage.Store, ctx context.Context) {
+	t.Helper()
+	store.CleanupOldChanges(ctx, 0)
+}
+
+// createTestChange creates a change and returns its ID
+func createTestChange(t *testing.T, store *storage.Store, ctx context.Context) int64 {
+	settings1 := []storage.Setting{{Variable: "api.test.setting", Value: "v1", SettingType: "s", Description: "API Test"}}
+	store.SaveSnapshot(ctx, settings1, "v1.0")
+	settings2 := []storage.Setting{{Variable: "api.test.setting", Value: "v2", SettingType: "s", Description: "API Test"}}
+	store.SaveSnapshot(ctx, settings2, "v1.0")
+
+	changes, err := store.GetChangesWithAnnotations(ctx, 1)
+	if err != nil || len(changes) == 0 {
+		t.Fatal("Failed to create test change")
+	}
+	return changes[0].ID
+}
+
+func TestAnnotationAPI_Create(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	cleanupAnnotationTestData(t, store, ctx)
+	changeID := createTestChange(t, store, ctx)
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	// Test POST /api/annotations
+	body := strings.NewReader(`{"change_id":` + itoa(changeID) + `,"content":"API test note"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/annotations", body)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("Expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify response contains the annotation
+	respBody := w.Body.String()
+	if !strings.Contains(respBody, "API test note") {
+		t.Errorf("Expected response to contain 'API test note', got %s", respBody)
+	}
+	if !strings.Contains(respBody, `"change_id"`) {
+		t.Errorf("Expected response to contain change_id, got %s", respBody)
+	}
+}
+
+func TestAnnotationAPI_CreateWithBasicAuth(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	cleanupAnnotationTestData(t, store, ctx)
+	changeID := createTestChange(t, store, ctx)
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	body := strings.NewReader(`{"change_id":` + itoa(changeID) + `,"content":"Auth test note"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/annotations", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("testadmin", "password")
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("Expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify created_by contains the username
+	respBody := w.Body.String()
+	if !strings.Contains(respBody, "testadmin") {
+		t.Errorf("Expected response to contain 'testadmin' as created_by, got %s", respBody)
+	}
+}
+
+func TestAnnotationAPI_GetNotFound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/annotations/999999", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected 404, got %d", w.Code)
+	}
+}
+
+func TestAnnotationAPI_InvalidJSON(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/annotations", strings.NewReader("not json"))
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400, got %d", w.Code)
+	}
+}
+
+func TestAnnotationAPI_EmptyContent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/annotations",
+		strings.NewReader(`{"change_id":1,"content":""}`))
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for empty content, got %d", w.Code)
+	}
+}
+
+func TestAnnotationAPI_MissingChangeID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/annotations",
+		strings.NewReader(`{"content":"no change id"}`))
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for missing change_id, got %d", w.Code)
+	}
+}
+
+func TestAnnotationAPI_Update(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	cleanupAnnotationTestData(t, store, ctx)
+	changeID := createTestChange(t, store, ctx)
+
+	// Create an annotation first
+	ann, err := store.CreateAnnotation(ctx, changeID, "Original content", "user1")
+	if err != nil {
+		t.Fatalf("Failed to create annotation: %v", err)
+	}
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	// Update via API
+	body := strings.NewReader(`{"content":"Updated content"}`)
+	req := httptest.NewRequest(http.MethodPut, "/api/annotations/"+itoa(ann.ID), body)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("user2", "password")
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify response contains updated content and updated_by
+	respBody := w.Body.String()
+	if !strings.Contains(respBody, "Updated content") {
+		t.Errorf("Expected 'Updated content' in response, got %s", respBody)
+	}
+	if !strings.Contains(respBody, "user2") {
+		t.Errorf("Expected 'user2' as updated_by in response, got %s", respBody)
+	}
+}
+
+func TestAnnotationAPI_Delete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	cleanupAnnotationTestData(t, store, ctx)
+	changeID := createTestChange(t, store, ctx)
+
+	// Create an annotation first
+	ann, err := store.CreateAnnotation(ctx, changeID, "To be deleted", "user")
+	if err != nil {
+		t.Fatalf("Failed to create annotation: %v", err)
+	}
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	// Delete via API
+	req := httptest.NewRequest(http.MethodDelete, "/api/annotations/"+itoa(ann.ID), nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Errorf("Expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify annotation is gone
+	deleted, _ := store.GetAnnotation(ctx, ann.ID)
+	if deleted != nil {
+		t.Error("Expected annotation to be deleted")
+	}
+}
+
+func TestAnnotationAPI_InvalidID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/annotations/notanumber", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400, got %d", w.Code)
+	}
+}
+
+func TestAnnotationAPI_MethodNotAllowed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	// GET on /api/annotations (collection) should not be allowed
+	req := httptest.NewRequest(http.MethodGet, "/api/annotations", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405, got %d", w.Code)
+	}
+}
+
+// itoa is a helper to convert int64 to string
+func itoa(i int64) string {
+	return fmt.Sprintf("%d", i)
 }

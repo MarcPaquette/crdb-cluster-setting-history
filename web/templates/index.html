@@ -172,6 +172,106 @@
         .export-btn:hover {
             opacity: 0.9;
         }
+        .notes-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        .notes-btn:hover {
+            background: var(--hover-bg);
+            color: var(--text-primary);
+        }
+        .notes-btn.has-note {
+            background: var(--accent-color);
+            color: white;
+            border-color: var(--accent-color);
+        }
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.visible {
+            display: flex;
+        }
+        .modal {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            padding: 24px;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 4px 20px var(--shadow-color);
+        }
+        .modal h2 {
+            margin-top: 0;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+        }
+        .modal textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: inherit;
+            resize: vertical;
+        }
+        .modal textarea:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 16px;
+            justify-content: flex-end;
+        }
+        .modal-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .modal-btn-primary {
+            background: var(--accent-color);
+            color: white;
+        }
+        .modal-btn-primary:hover {
+            opacity: 0.9;
+        }
+        .modal-btn-secondary {
+            background: var(--border-color);
+            color: var(--text-primary);
+        }
+        .modal-btn-secondary:hover {
+            opacity: 0.8;
+        }
+        .modal-btn-danger {
+            background: var(--old-value-text);
+            color: white;
+        }
+        .modal-btn-danger:hover {
+            opacity: 0.9;
+        }
+        .modal-meta {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 12px;
+        }
     </style>
 </head>
 <body>
@@ -197,11 +297,12 @@
                     <th>Version</th>
                     <th>Old Value</th>
                     <th>New Value</th>
+                    <th>Notes</th>
                 </tr>
             </thead>
             <tbody>
                 {{range .Changes}}
-                <tr>
+                <tr data-change-id="{{.ID}}" data-annotation-id="{{if .Annotation}}{{.Annotation.ID}}{{end}}">
                     <td class="timestamp">{{.DetectedAt.Format "2006-01-02 15:04:05"}}</td>
                     <td class="variable" {{if .Description}}title="{{.Description}}"{{end}}>{{.Variable}}</td>
                     <td class="value">{{.Version}}</td>
@@ -219,6 +320,13 @@
                         <em>(removed)</em>
                         {{end}}
                     </td>
+                    <td>
+                        <button class="notes-btn {{if .Annotation}}has-note{{end}}"
+                                onclick="openNoteModal('{{.ID}}', {{if .Annotation}}'{{.Annotation.ID}}', '{{js .Annotation.Content}}'{{else}}'0', ''{{end}})"
+                                title="{{if .Annotation}}View/Edit Note{{else}}Add Note{{end}}">
+                            {{if .Annotation}}View{{else}}Add{{end}}
+                        </button>
+                    </td>
                 </tr>
                 {{end}}
             </tbody>
@@ -229,6 +337,20 @@
             No changes detected yet. Settings are being collected periodically.
         </div>
         {{end}}
+    </div>
+
+    <!-- Note Modal -->
+    <div id="noteModal" class="modal-overlay">
+        <div class="modal">
+            <h2 id="modalTitle">Add Note</h2>
+            <textarea id="noteContent" placeholder="Add your note here..."></textarea>
+            <div id="modalMeta" class="modal-meta"></div>
+            <div class="modal-buttons">
+                <button id="deleteNoteBtn" class="modal-btn modal-btn-danger" style="display:none">Delete</button>
+                <button onclick="closeModal()" class="modal-btn modal-btn-secondary">Cancel</button>
+                <button id="saveNoteBtn" class="modal-btn modal-btn-primary">Save</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -272,6 +394,105 @@
                 }
             });
         }
+
+        // Modal state - store IDs as strings to preserve precision for large integers
+        let currentChangeID = '0';
+        let currentAnnotationID = '0';
+
+        function openNoteModal(changeID, annotationID, content) {
+            currentChangeID = changeID;
+            currentAnnotationID = annotationID;
+
+            const modal = document.getElementById('noteModal');
+            const title = document.getElementById('modalTitle');
+            const textarea = document.getElementById('noteContent');
+            const deleteBtn = document.getElementById('deleteNoteBtn');
+
+            if (annotationID !== '0' && annotationID !== '') {
+                title.textContent = 'Edit Note';
+                textarea.value = content;
+                deleteBtn.style.display = 'block';
+            } else {
+                title.textContent = 'Add Note';
+                textarea.value = '';
+                deleteBtn.style.display = 'none';
+            }
+
+            modal.classList.add('visible');
+            textarea.focus();
+        }
+
+        function closeModal() {
+            document.getElementById('noteModal').classList.remove('visible');
+        }
+
+        async function saveNote() {
+            const content = document.getElementById('noteContent').value.trim();
+            if (!content) {
+                alert('Please enter a note');
+                return;
+            }
+
+            try {
+                let response;
+                if (currentAnnotationID !== '0' && currentAnnotationID !== '') {
+                    // Update existing
+                    response = await fetch('/api/annotations/' + currentAnnotationID, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({content: content})
+                    });
+                } else {
+                    // Create new - construct JSON manually to preserve large integer precision
+                    const escapedContent = JSON.stringify(content);
+                    const body = '{"change_id":' + currentChangeID + ',"content":' + escapedContent + '}';
+                    response = await fetch('/api/annotations', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: body
+                    });
+                }
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error || 'Failed to save');
+                }
+
+                location.reload();
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        async function deleteNote() {
+            if (!confirm('Delete this note?')) return;
+
+            try {
+                const response = await fetch('/api/annotations/' + currentAnnotationID, {
+                    method: 'DELETE'
+                });
+                if (!response.ok && response.status !== 204) {
+                    throw new Error('Failed to delete');
+                }
+                location.reload();
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        // Wire up button handlers
+        document.getElementById('saveNoteBtn').addEventListener('click', saveNote);
+        document.getElementById('deleteNoteBtn').addEventListener('click', deleteNote);
+
+        // Close modal on escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        // Close modal on backdrop click
+        document.getElementById('noteModal').addEventListener('click', function(e) {
+            if (e.target === this) closeModal();
+        });
     </script>
 </body>
 </html>
