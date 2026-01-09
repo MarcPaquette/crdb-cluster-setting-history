@@ -124,8 +124,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/export", s.handleExport)
 	mux.HandleFunc("/compare", s.handleCompare)
+	mux.HandleFunc("/history", s.handleHistory)
 	mux.HandleFunc("/api/clusters", s.handleAPIClusters)
 	mux.HandleFunc("/api/compare", s.handleAPICompare)
+	mux.HandleFunc("/api/snapshots", s.handleAPISnapshots)
+	mux.HandleFunc("/api/compare-snapshots", s.handleAPICompareSnapshots)
 	mux.HandleFunc("/api/annotations", s.handleAnnotations)
 	mux.HandleFunc("/api/annotations/", s.handleAnnotationByID)
 	return mux
@@ -279,6 +282,13 @@ type SettingDiff struct {
 	Description string `json:"description,omitempty"`
 }
 
+// TimeCompareResult represents the comparison between two snapshots in time.
+type TimeCompareResult struct {
+	BeforeOnly []SettingDiff `json:"before_only"` // Settings only in the earlier snapshot
+	AfterOnly  []SettingDiff `json:"after_only"`  // Settings only in the later snapshot
+	Different  []SettingDiff `json:"different"`   // Settings with different values
+}
+
 // handleCompare renders the comparison page.
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	data := struct {
@@ -373,6 +383,163 @@ func (s *Server) handleAPICompare(w http.ResponseWriter, r *http.Request) {
 	})
 	sort.Slice(result.Cluster2Only, func(i, j int) bool {
 		return result.Cluster2Only[i].Variable < result.Cluster2Only[j].Variable
+	})
+	sort.Slice(result.Different, func(i, j int) bool {
+		return result.Different[i].Variable < result.Different[j].Variable
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+// handleHistory renders the time-based comparison page.
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	data := struct {
+		Clusters       []config.ClusterConfig
+		CurrentCluster string
+	}{
+		Clusters:       s.clusters,
+		CurrentCluster: s.getClusterID(r),
+	}
+
+	if err := s.tmpl.ExecuteTemplate(w, "history.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleAPISnapshots returns a list of snapshots for a cluster as JSON.
+func (s *Server) handleAPISnapshots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	clusterID := r.URL.Query().Get("cluster")
+	if clusterID == "" {
+		clusterID = s.defaultClusterID
+	}
+
+	limitStr := r.URL.Query().Get("limit")
+	limit := 100 // default
+	if limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+
+	ctx := r.Context()
+	snapshots, err := s.store.ListSnapshots(ctx, clusterID, limit)
+	if err != nil {
+		log.Printf("Error listing snapshots for cluster %s: %v", clusterID, err)
+		s.jsonError(w, "Failed to list snapshots", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(snapshots)
+}
+
+// handleAPICompareSnapshots returns the comparison between two snapshots as JSON.
+func (s *Server) handleAPICompareSnapshots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	snapshot1Str := r.URL.Query().Get("snapshot1")
+	snapshot2Str := r.URL.Query().Get("snapshot2")
+
+	if snapshot1Str == "" || snapshot2Str == "" {
+		s.jsonError(w, "snapshot1 and snapshot2 query parameters are required", http.StatusBadRequest)
+		return
+	}
+
+	snapshot1ID, err := strconv.ParseInt(snapshot1Str, 10, 64)
+	if err != nil {
+		s.jsonError(w, "invalid snapshot1 ID", http.StatusBadRequest)
+		return
+	}
+
+	snapshot2ID, err := strconv.ParseInt(snapshot2Str, 10, 64)
+	if err != nil {
+		s.jsonError(w, "invalid snapshot2 ID", http.StatusBadRequest)
+		return
+	}
+
+	if snapshot1ID == snapshot2ID {
+		s.jsonError(w, "snapshot1 and snapshot2 must be different", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Get settings for both snapshots
+	settings1, err := s.store.GetSnapshotByID(ctx, snapshot1ID)
+	if err != nil {
+		log.Printf("Error getting snapshot %d: %v", snapshot1ID, err)
+		s.jsonError(w, "Failed to get snapshot1", http.StatusInternalServerError)
+		return
+	}
+	if settings1 == nil {
+		s.jsonError(w, "snapshot1 not found", http.StatusNotFound)
+		return
+	}
+
+	settings2, err := s.store.GetSnapshotByID(ctx, snapshot2ID)
+	if err != nil {
+		log.Printf("Error getting snapshot %d: %v", snapshot2ID, err)
+		s.jsonError(w, "Failed to get snapshot2", http.StatusInternalServerError)
+		return
+	}
+	if settings2 == nil {
+		s.jsonError(w, "snapshot2 not found", http.StatusNotFound)
+		return
+	}
+
+	// Compare settings
+	result := TimeCompareResult{
+		BeforeOnly: []SettingDiff{},
+		AfterOnly:  []SettingDiff{},
+		Different:  []SettingDiff{},
+	}
+
+	// Find settings only in snapshot1 (before) or different
+	for variable, setting1 := range settings1 {
+		setting2, exists := settings2[variable]
+		if !exists {
+			result.BeforeOnly = append(result.BeforeOnly, SettingDiff{
+				Variable:    variable,
+				Value1:      setting1.Value,
+				Description: setting1.Description,
+			})
+		} else if setting1.Value != setting2.Value {
+			result.Different = append(result.Different, SettingDiff{
+				Variable:    variable,
+				Value1:      setting1.Value,
+				Value2:      setting2.Value,
+				Description: setting1.Description,
+			})
+		}
+	}
+
+	// Find settings only in snapshot2 (after)
+	for variable, setting2 := range settings2 {
+		if _, exists := settings1[variable]; !exists {
+			result.AfterOnly = append(result.AfterOnly, SettingDiff{
+				Variable:    variable,
+				Value2:      setting2.Value,
+				Description: setting2.Description,
+			})
+		}
+	}
+
+	// Sort results by variable name
+	sort.Slice(result.BeforeOnly, func(i, j int) bool {
+		return result.BeforeOnly[i].Variable < result.BeforeOnly[j].Variable
+	})
+	sort.Slice(result.AfterOnly, func(i, j int) bool {
+		return result.AfterOnly[i].Variable < result.AfterOnly[j].Variable
 	})
 	sort.Slice(result.Different, func(i, j int) bool {
 		return result.Different[i].Variable < result.Different[j].Variable

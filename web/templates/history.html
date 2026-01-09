@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compare Over Time - CockroachDB Cluster Settings History</title>
+    <style>
+        :root {
+            --bg-primary: #f5f5f5;
+            --bg-secondary: white;
+            --text-primary: #333;
+            --text-secondary: #666;
+            --border-color: #eee;
+            --shadow-color: rgba(0,0,0,0.1);
+            --accent-color: #6933ff;
+            --hover-bg: #f9f9f9;
+            --old-value-bg: #fee;
+            --old-value-text: #c00;
+            --new-value-bg: #efe;
+            --new-value-text: #080;
+            --em-text: #999;
+            --warning-bg: #fff3cd;
+            --warning-text: #856404;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-primary: #1a1a1a;
+                --bg-secondary: #2d2d2d;
+                --text-primary: #e0e0e0;
+                --text-secondary: #a0a0a0;
+                --border-color: #404040;
+                --shadow-color: rgba(0,0,0,0.3);
+                --accent-color: #8b5cf6;
+                --hover-bg: #363636;
+                --old-value-bg: #3d1f1f;
+                --old-value-text: #f87171;
+                --new-value-bg: #1f3d1f;
+                --new-value-text: #4ade80;
+                --em-text: #707070;
+                --warning-bg: #3d3219;
+                --warning-text: #fcd34d;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+        h1, h2 {
+            color: var(--text-primary);
+            margin-bottom: 5px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .back-link {
+            color: var(--accent-color);
+            text-decoration: none;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .controls {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+            color: var(--text-secondary);
+        }
+        .cluster-select, .snapshot-select {
+            padding: 8px 12px;
+            font-size: 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            min-width: 150px;
+        }
+        .snapshot-select {
+            min-width: 250px;
+        }
+        .cluster-select:focus, .snapshot-select:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+        .compare-btn {
+            padding: 8px 16px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            background: var(--accent-color);
+            color: white;
+            cursor: pointer;
+        }
+        .compare-btn:hover {
+            opacity: 0.9;
+        }
+        .compare-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-secondary);
+            box-shadow: 0 1px 3px var(--shadow-color);
+            margin-bottom: 30px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        th {
+            background: var(--accent-color);
+            color: white;
+            font-weight: 500;
+        }
+        tr:hover {
+            background: var(--hover-bg);
+        }
+        .value {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+        .before-value {
+            color: var(--old-value-text);
+            background: var(--old-value-bg);
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        .after-value {
+            color: var(--new-value-text);
+            background: var(--new-value-bg);
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        .variable {
+            font-weight: 500;
+            cursor: help;
+        }
+        .variable[title]:hover {
+            text-decoration: underline dotted;
+        }
+        em {
+            color: var(--em-text);
+        }
+        .section-header {
+            margin-top: 30px;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            border-left: 4px solid var(--accent-color);
+        }
+        .section-header h2 {
+            margin: 0;
+            font-size: 16px;
+        }
+        .section-header .count {
+            color: var(--text-secondary);
+            font-weight: normal;
+            font-size: 14px;
+        }
+        .no-results {
+            padding: 20px;
+            text-align: center;
+            color: var(--text-secondary);
+            background: var(--bg-secondary);
+            border-radius: 4px;
+        }
+        .loading {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+        .hidden {
+            display: none;
+        }
+        .arrow-text {
+            font-weight: bold;
+            color: var(--text-secondary);
+            padding: 0 5px;
+            font-size: 18px;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .control-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        .control-stack {
+            display: flex;
+            flex-direction: column;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">&larr; Back to Changes</a>
+        <h1>Compare Settings Over Time</h1>
+
+        <div class="controls">
+            {{if gt (len .Clusters) 1}}
+            <div class="control-stack">
+                <span class="control-label">Cluster</span>
+                <select id="clusterSelect" class="cluster-select">
+                    {{range .Clusters}}
+                    <option value="{{.ID}}" {{if eq .ID $.CurrentCluster}}selected{{end}}>{{.Name}}</option>
+                    {{end}}
+                </select>
+            </div>
+            {{end}}
+            <div class="control-stack">
+                <span class="control-label">Before</span>
+                <select id="snapshot1" class="snapshot-select">
+                    <option value="">Select snapshot...</option>
+                </select>
+            </div>
+            <span class="arrow-text">&rarr;</span>
+            <div class="control-stack">
+                <span class="control-label">After</span>
+                <select id="snapshot2" class="snapshot-select">
+                    <option value="">Select snapshot...</option>
+                </select>
+            </div>
+            <button id="compareBtn" class="compare-btn" disabled>Compare</button>
+        </div>
+
+        <div id="loading" class="loading hidden">Loading comparison...</div>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const clusterSelect = document.getElementById('clusterSelect');
+        const snapshot1Select = document.getElementById('snapshot1');
+        const snapshot2Select = document.getElementById('snapshot2');
+        const compareBtn = document.getElementById('compareBtn');
+        const resultsDiv = document.getElementById('results');
+        const loadingDiv = document.getElementById('loading');
+
+        // Current cluster ID
+        let currentCluster = '{{.CurrentCluster}}';
+
+        // Load snapshots on page load
+        loadSnapshots();
+
+        // Reload snapshots when cluster changes
+        if (clusterSelect) {
+            clusterSelect.addEventListener('change', function() {
+                currentCluster = this.value;
+                loadSnapshots();
+                resultsDiv.innerHTML = '';
+            });
+        }
+
+        function updateButtonState() {
+            const s1 = snapshot1Select.value;
+            const s2 = snapshot2Select.value;
+            compareBtn.disabled = !s1 || !s2 || s1 === s2;
+        }
+
+        snapshot1Select.addEventListener('change', updateButtonState);
+        snapshot2Select.addEventListener('change', updateButtonState);
+
+        async function loadSnapshots() {
+            snapshot1Select.innerHTML = '<option value="">Loading...</option>';
+            snapshot2Select.innerHTML = '<option value="">Loading...</option>';
+            compareBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/snapshots?cluster=' + encodeURIComponent(currentCluster) + '&limit=100');
+                if (!response.ok) {
+                    throw new Error('Failed to load snapshots');
+                }
+                const snapshots = await response.json();
+
+                let options = '<option value="">Select snapshot...</option>';
+                if (snapshots && snapshots.length > 0) {
+                    for (const snap of snapshots) {
+                        const date = new Date(snap.collected_at);
+                        const formatted = formatDate(date);
+                        options += '<option value="' + snap.id + '">' + formatted + '</option>';
+                    }
+                } else {
+                    options = '<option value="">No snapshots available</option>';
+                }
+
+                snapshot1Select.innerHTML = options;
+                snapshot2Select.innerHTML = options;
+            } catch (e) {
+                snapshot1Select.innerHTML = '<option value="">Error loading snapshots</option>';
+                snapshot2Select.innerHTML = '<option value="">Error loading snapshots</option>';
+            }
+        }
+
+        function formatDate(date) {
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const seconds = String(date.getSeconds()).padStart(2, '0');
+            return year + '-' + month + '-' + day + ' ' + hours + ':' + minutes + ':' + seconds;
+        }
+
+        compareBtn.addEventListener('click', async function() {
+            const s1 = snapshot1Select.value;
+            const s2 = snapshot2Select.value;
+
+            if (!s1 || !s2 || s1 === s2) return;
+
+            resultsDiv.innerHTML = '';
+            loadingDiv.classList.remove('hidden');
+            compareBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/compare-snapshots?snapshot1=' + encodeURIComponent(s1) + '&snapshot2=' + encodeURIComponent(s2));
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.error || 'Failed to compare snapshots');
+                }
+                const data = await response.json();
+                renderResults(data);
+            } catch (e) {
+                resultsDiv.innerHTML = '<div class="no-results">Error: ' + escapeHtml(e.message) + '</div>';
+            } finally {
+                loadingDiv.classList.add('hidden');
+                updateButtonState();
+            }
+        });
+
+        function getSnapshotLabel(id) {
+            for (const opt of snapshot1Select.options) {
+                if (opt.value === id) return opt.textContent;
+            }
+            return id;
+        }
+
+        function renderResults(data) {
+            const beforeLabel = getSnapshotLabel(snapshot1Select.value);
+            const afterLabel = getSnapshotLabel(snapshot2Select.value);
+            let html = '';
+
+            // Changed settings section
+            if (data.different && data.different.length > 0) {
+                html += '<div class="section-header"><h2>Changed Settings <span class="count">(' + data.different.length + ')</span></h2></div>';
+                html += '<table><thead><tr><th>Setting</th><th>Before</th><th>After</th></tr></thead><tbody>';
+                for (const diff of data.different) {
+                    html += '<tr>';
+                    html += '<td class="variable" title="' + escapeHtml(diff.description || '') + '">' + escapeHtml(diff.variable) + '</td>';
+                    html += '<td class="value"><span class="before-value">' + escapeHtml(diff.value1) + '</span></td>';
+                    html += '<td class="value"><span class="after-value">' + escapeHtml(diff.value2) + '</span></td>';
+                    html += '</tr>';
+                }
+                html += '</tbody></table>';
+            }
+
+            // Removed settings section (before_only)
+            if (data.before_only && data.before_only.length > 0) {
+                html += '<div class="section-header"><h2>Removed Settings <span class="count">(' + data.before_only.length + ')</span></h2></div>';
+                html += '<table><thead><tr><th>Setting</th><th>Previous Value</th></tr></thead><tbody>';
+                for (const diff of data.before_only) {
+                    html += '<tr>';
+                    html += '<td class="variable" title="' + escapeHtml(diff.description || '') + '">' + escapeHtml(diff.variable) + '</td>';
+                    html += '<td class="value"><span class="before-value">' + escapeHtml(diff.value1) + '</span></td>';
+                    html += '</tr>';
+                }
+                html += '</tbody></table>';
+            }
+
+            // Added settings section (after_only)
+            if (data.after_only && data.after_only.length > 0) {
+                html += '<div class="section-header"><h2>Added Settings <span class="count">(' + data.after_only.length + ')</span></h2></div>';
+                html += '<table><thead><tr><th>Setting</th><th>New Value</th></tr></thead><tbody>';
+                for (const diff of data.after_only) {
+                    html += '<tr>';
+                    html += '<td class="variable" title="' + escapeHtml(diff.description || '') + '">' + escapeHtml(diff.variable) + '</td>';
+                    html += '<td class="value"><span class="after-value">' + escapeHtml(diff.value2) + '</span></td>';
+                    html += '</tr>';
+                }
+                html += '</tbody></table>';
+            }
+
+            if (!html) {
+                html = '<div class="no-results">No differences found between the selected snapshots.</div>';
+            }
+
+            resultsDiv.innerHTML = html;
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

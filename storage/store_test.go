@@ -950,3 +950,120 @@ func TestMultiClusterChanges(t *testing.T) {
 		}
 	}
 }
+
+func TestListSnapshots(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	clusterID := "list-snapshots-test"
+
+	// Create multiple snapshots
+	settings := []Setting{{Variable: "snapshot.test", Value: "v1", SettingType: "s", Description: "Test"}}
+	for i := 0; i < 5; i++ {
+		err := store.SaveSnapshot(ctx, clusterID, settings, "v1.0")
+		if err != nil {
+			t.Fatalf("Failed to save snapshot %d: %v", i, err)
+		}
+		time.Sleep(10 * time.Millisecond) // Ensure different timestamps
+	}
+
+	// List snapshots
+	snapshots, err := store.ListSnapshots(ctx, clusterID, 10)
+	if err != nil {
+		t.Fatalf("ListSnapshots failed: %v", err)
+	}
+
+	if len(snapshots) < 5 {
+		t.Errorf("Expected at least 5 snapshots, got %d", len(snapshots))
+	}
+
+	// Verify order (most recent first)
+	for i := 1; i < len(snapshots); i++ {
+		if snapshots[i].CollectedAt.After(snapshots[i-1].CollectedAt) {
+			t.Errorf("Snapshots not in descending order at index %d", i)
+		}
+	}
+
+	// Test limit
+	limited, err := store.ListSnapshots(ctx, clusterID, 2)
+	if err != nil {
+		t.Fatalf("ListSnapshots with limit failed: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Errorf("Expected 2 snapshots with limit, got %d", len(limited))
+	}
+
+	// Test empty result for non-existent cluster
+	empty, err := store.ListSnapshots(ctx, "non-existent-cluster", 10)
+	if err != nil {
+		t.Fatalf("ListSnapshots for non-existent cluster failed: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("Expected 0 snapshots for non-existent cluster, got %d", len(empty))
+	}
+}
+
+func TestGetSnapshotByID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	clusterID := "get-snapshot-by-id-test"
+
+	// Create a snapshot with known settings
+	settings := []Setting{
+		{Variable: "test.setting.a", Value: "valueA", SettingType: "s", Description: "Description A"},
+		{Variable: "test.setting.b", Value: "valueB", SettingType: "i", Description: "Description B"},
+	}
+	err = store.SaveSnapshot(ctx, clusterID, settings, "v1.0")
+	if err != nil {
+		t.Fatalf("Failed to save snapshot: %v", err)
+	}
+
+	// Get snapshot list to find the ID
+	snapshots, err := store.ListSnapshots(ctx, clusterID, 1)
+	if err != nil || len(snapshots) == 0 {
+		t.Fatalf("Failed to get snapshot ID: %v", err)
+	}
+	snapshotID := snapshots[0].ID
+
+	// Get snapshot by ID
+	retrieved, err := store.GetSnapshotByID(ctx, snapshotID)
+	if err != nil {
+		t.Fatalf("GetSnapshotByID failed: %v", err)
+	}
+	if retrieved == nil {
+		t.Fatal("Expected settings, got nil")
+	}
+
+	// Verify settings
+	if len(retrieved) != 2 {
+		t.Errorf("Expected 2 settings, got %d", len(retrieved))
+	}
+	if s, ok := retrieved["test.setting.a"]; !ok || s.Value != "valueA" {
+		t.Errorf("Expected test.setting.a=valueA, got %v", retrieved["test.setting.a"])
+	}
+	if s, ok := retrieved["test.setting.b"]; !ok || s.Value != "valueB" {
+		t.Errorf("Expected test.setting.b=valueB, got %v", retrieved["test.setting.b"])
+	}
+
+	// Test non-existent snapshot
+	notFound, err := store.GetSnapshotByID(ctx, 999999999)
+	if err != nil {
+		t.Fatalf("GetSnapshotByID for non-existent should not error: %v", err)
+	}
+	if notFound != nil {
+		t.Errorf("Expected nil for non-existent snapshot, got %v", notFound)
+	}
+}

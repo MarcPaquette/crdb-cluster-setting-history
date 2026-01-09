@@ -46,6 +46,13 @@ type ChangeWithAnnotation struct {
 	Annotation *Annotation // nil if no annotation exists
 }
 
+// SnapshotInfo represents metadata about a snapshot (without full settings).
+type SnapshotInfo struct {
+	ID          int64     `json:"id,string"` // String to avoid JavaScript precision loss
+	ClusterID   string    `json:"cluster_id"`
+	CollectedAt time.Time `json:"collected_at"`
+}
+
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -332,6 +339,68 @@ func (s *Store) getLatestSnapshotWith(ctx context.Context, q querier, clusterID 
 		settings[setting.Variable] = setting
 	}
 
+	return settings, rows.Err()
+}
+
+// ListSnapshots returns recent snapshots for a cluster, ordered by most recent first.
+func (s *Store) ListSnapshots(ctx context.Context, clusterID string, limit int) ([]SnapshotInfo, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, cluster_id, collected_at
+		 FROM snapshots
+		 WHERE cluster_id = $1
+		 ORDER BY collected_at DESC
+		 LIMIT $2`,
+		clusterID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var snapshots []SnapshotInfo
+	for rows.Next() {
+		var snap SnapshotInfo
+		if err := rows.Scan(&snap.ID, &snap.ClusterID, &snap.CollectedAt); err != nil {
+			return nil, err
+		}
+		snapshots = append(snapshots, snap)
+	}
+	return snapshots, rows.Err()
+}
+
+// GetSnapshotByID retrieves all settings for a specific snapshot by its ID.
+// Returns nil, nil if the snapshot does not exist.
+func (s *Store) GetSnapshotByID(ctx context.Context, snapshotID int64) (map[string]Setting, error) {
+	// First verify the snapshot exists
+	var exists bool
+	err := s.pool.QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1)",
+		snapshotID,
+	).Scan(&exists)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	rows, err := s.pool.Query(ctx,
+		"SELECT variable, value, setting_type, description FROM settings WHERE snapshot_id = $1",
+		snapshotID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	settings := make(map[string]Setting)
+	for rows.Next() {
+		var setting Setting
+		if err := rows.Scan(&setting.Variable, &setting.Value, &setting.SettingType, &setting.Description); err != nil {
+			return nil, err
+		}
+		settings[setting.Variable] = setting
+	}
 	return settings, rows.Err()
 }
 

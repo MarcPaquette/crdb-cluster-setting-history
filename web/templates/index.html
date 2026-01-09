@@ -321,6 +321,7 @@
                 <input type="checkbox" id="autoRefresh"> Auto-refresh (30s)
             </label>
             <a href="/export{{if .CurrentCluster}}?cluster={{.CurrentCluster}}{{end}}" class="export-btn">Download CSV</a>
+            <a href="/history{{if .CurrentCluster}}?cluster={{.CurrentCluster}}{{end}}" class="compare-btn">Compare Over Time</a>
             {{if gt (len .Clusters) 1}}
             <a href="/compare" class="compare-btn">Compare Clusters</a>
             {{end}}
