@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -227,34 +228,21 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 // addClusterIDColumn adds cluster_id column to a table if it doesn't exist.
 // Existing rows get 'default' as their cluster_id for backward compatibility.
 func addClusterIDColumn(ctx context.Context, pool *pgxpool.Pool, tableName string) error {
-	var hasClusterIDColumn bool
-	err := pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_name = $1 AND column_name = 'cluster_id'
-		)
-	`, tableName).Scan(&hasClusterIDColumn)
+	// Use ADD COLUMN IF NOT EXISTS for idempotency (handles concurrent migrations)
+	_, err := pool.Exec(ctx, "ALTER TABLE "+tableName+" ADD COLUMN IF NOT EXISTS cluster_id TEXT NOT NULL DEFAULT 'default'")
 	if err != nil {
 		return err
 	}
 
-	if !hasClusterIDColumn {
-		// Add column with default value for existing rows
-		_, err = pool.Exec(ctx, "ALTER TABLE "+tableName+" ADD COLUMN cluster_id TEXT NOT NULL DEFAULT 'default'")
-		if err != nil {
-			return err
-		}
-
-		// Create index for efficient cluster-based queries
-		indexName := "idx_" + tableName + "_cluster"
-		orderColumn := "collected_at"
-		if tableName == "changes" {
-			orderColumn = "detected_at"
-		}
-		_, err = pool.Exec(ctx, "CREATE INDEX IF NOT EXISTS "+indexName+" ON "+tableName+"(cluster_id, "+orderColumn+" DESC)")
-		if err != nil {
-			return err
-		}
+	// Create index for efficient cluster-based queries
+	indexName := "idx_" + tableName + "_cluster"
+	orderColumn := "collected_at"
+	if tableName == "changes" {
+		orderColumn = "detected_at"
+	}
+	_, err = pool.Exec(ctx, "CREATE INDEX IF NOT EXISTS "+indexName+" ON "+tableName+"(cluster_id, "+orderColumn+" DESC)")
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -262,23 +250,10 @@ func addClusterIDColumn(ctx context.Context, pool *pgxpool.Pool, tableName strin
 
 // migrateMetadataForMultiCluster adds cluster_id to metadata table and updates primary key.
 func migrateMetadataForMultiCluster(ctx context.Context, pool *pgxpool.Pool) error {
-	var hasClusterIDColumn bool
-	err := pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_name = 'metadata' AND column_name = 'cluster_id'
-		)
-	`).Scan(&hasClusterIDColumn)
+	// Use ADD COLUMN IF NOT EXISTS for idempotency
+	_, err := pool.Exec(ctx, "ALTER TABLE metadata ADD COLUMN IF NOT EXISTS cluster_id TEXT NOT NULL DEFAULT 'default'")
 	if err != nil {
 		return err
-	}
-
-	if !hasClusterIDColumn {
-		// Add cluster_id column with default value
-		_, err = pool.Exec(ctx, "ALTER TABLE metadata ADD COLUMN cluster_id TEXT NOT NULL DEFAULT 'default'")
-		if err != nil {
-			return err
-		}
 	}
 
 	// Check if primary key already includes cluster_id
@@ -300,11 +275,24 @@ func migrateMetadataForMultiCluster(ctx context.Context, pool *pgxpool.Pool) err
 		// CockroachDB requires both operations in the same ALTER TABLE statement
 		_, err = pool.Exec(ctx, "ALTER TABLE metadata DROP CONSTRAINT metadata_pkey, ADD PRIMARY KEY (cluster_id, key)")
 		if err != nil {
-			return err
+			// Ignore error if another connection already migrated the PK
+			// This can happen with concurrent test execution
+			if !isConstraintAlreadyExists(err) {
+				return err
+			}
 		}
 	}
 
 	return nil
+}
+
+// isConstraintAlreadyExists checks if the error indicates a constraint already exists
+func isConstraintAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "already exists") || strings.Contains(errStr, "42710")
 }
 
 func (s *Store) GetLatestSnapshot(ctx context.Context, clusterID string) (map[string]Setting, error) {

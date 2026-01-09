@@ -2,15 +2,97 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // testClusterID is used for all tests
 const testClusterID = "test-cluster"
 
+// testDBURL is set by TestMain after creating the test database
+var testDBURL string
+
+func TestMain(m *testing.M) {
+	// Get admin connection to create test database
+	adminURL := os.Getenv("DATABASE_URL")
+	if adminURL == "" {
+		fmt.Println("DATABASE_URL not set, skipping database setup")
+		os.Exit(m.Run())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Connect as admin
+	adminPool, err := pgxpool.New(ctx, adminURL)
+	if err != nil {
+		fmt.Printf("Failed to connect to admin database: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Create test database and user
+	testDB := "cluster_history_test"
+	testUser := "history_test_user"
+
+	// Create user if not exists (ignore error if already exists)
+	adminPool.Exec(ctx, fmt.Sprintf("CREATE USER IF NOT EXISTS %s", testUser))
+
+	// Drop and recreate test database for clean slate
+	adminPool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", testDB))
+	_, err = adminPool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", testDB))
+	if err != nil {
+		fmt.Printf("Failed to create test database: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Grant privileges
+	adminPool.Exec(ctx, fmt.Sprintf("GRANT ALL ON DATABASE %s TO %s", testDB, testUser))
+
+	adminPool.Close()
+
+	// Build test database URL
+	// Replace database name in admin URL
+	testDBURL = replaceDatabase(adminURL, testDB)
+
+	// Also set for any code that reads the env var directly
+	os.Setenv("TEST_DATABASE_URL", testDBURL)
+
+	// Run tests
+	code := m.Run()
+
+	// Cleanup: drop test database
+	adminPool, err = pgxpool.New(context.Background(), adminURL)
+	if err == nil {
+		adminPool.Exec(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", testDB))
+		adminPool.Close()
+	}
+
+	os.Exit(code)
+}
+
+// replaceDatabase replaces the database name in a connection URL
+func replaceDatabase(url, newDB string) string {
+	// Handle postgresql://user@host:port/database?params format
+	if idx := strings.LastIndex(url, "/"); idx != -1 {
+		// Find the end of database name (before ? if present)
+		rest := url[idx+1:]
+		if qIdx := strings.Index(rest, "?"); qIdx != -1 {
+			return url[:idx+1] + newDB + rest[qIdx:]
+		}
+		return url[:idx+1] + newDB
+	}
+	return url
+}
+
 func getTestDB(t *testing.T) string {
+	if testDBURL != "" {
+		return testDBURL
+	}
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		url = os.Getenv("HISTORY_DATABASE_URL")
@@ -21,21 +103,20 @@ func getTestDB(t *testing.T) string {
 	return url
 }
 
-// cleanupTestData removes all test data from the database
+// cleanupTestData removes all test data from the database using TRUNCATE for speed
 func cleanupTestData(t *testing.T, store *Store) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Delete in order to respect foreign keys (or CASCADE handles it)
-	store.pool.Exec(ctx, "DELETE FROM annotations")
-	store.pool.Exec(ctx, "DELETE FROM changes")
-	store.pool.Exec(ctx, "DELETE FROM settings")
-	store.pool.Exec(ctx, "DELETE FROM snapshots")
+	// TRUNCATE is much faster than DELETE for large tables
+	// CASCADE handles foreign key relationships
+	store.pool.Exec(ctx, "TRUNCATE TABLE annotations, changes, settings, snapshots, metadata CASCADE")
 }
 
 func TestNew(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Longer timeout for first connection - schema migration can be slow
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	store, err := New(ctx, getTestDB(t))
