@@ -30,6 +30,9 @@ certs/
 .env
 .env.*
 
+# Configuration files with credentials (use clusters.yaml.example as template)
+clusters.yaml
+
 # Claude Code
 .claude/
 

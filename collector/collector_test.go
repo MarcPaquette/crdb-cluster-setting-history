@@ -11,6 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// testClusterID is used for all tests
+const testClusterID = "test-cluster"
+
 func TestShowClusterSettingsColumns(t *testing.T) {
 	connStr := os.Getenv("DATABASE_URL")
 	if connStr == "" {
@@ -82,7 +85,7 @@ func TestNew(t *testing.T) {
 	}
 	defer store.Close()
 
-	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	coll, err := New(ctx, testClusterID, sourceURL, store, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}
@@ -108,7 +111,7 @@ func TestCollect(t *testing.T) {
 	}
 	defer store.Close()
 
-	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	coll, err := New(ctx, testClusterID, sourceURL, store, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}
@@ -121,7 +124,7 @@ func TestCollect(t *testing.T) {
 	}
 
 	// Verify data was stored
-	snapshot, err := store.GetLatestSnapshot(ctx)
+	snapshot, err := store.GetLatestSnapshot(ctx, testClusterID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
 	}
@@ -146,7 +149,7 @@ func TestStart(t *testing.T) {
 	defer store.Close()
 
 	// Use a short interval
-	coll, err := New(ctx, sourceURL, store, 1*time.Second)
+	coll, err := New(ctx, testClusterID, sourceURL, store, 1*time.Second)
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}
@@ -163,7 +166,7 @@ func TestStart(t *testing.T) {
 	<-done
 
 	// Verify data was collected
-	snapshot, err := store.GetLatestSnapshot(ctx)
+	snapshot, err := store.GetLatestSnapshot(ctx, testClusterID)
 	if err != nil && ctx.Err() == nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
 	}
@@ -186,7 +189,7 @@ func TestNewWithInvalidURL(t *testing.T) {
 	defer store.Close()
 
 	// Use invalid source URL - should fail at pool creation
-	_, err = New(ctx, "postgresql://invalid:5432/db?connect_timeout=1", store, 15*time.Minute)
+	_, err = New(ctx, testClusterID, "postgresql://invalid:5432/db?connect_timeout=1", store, 15*time.Minute)
 	if err == nil {
 		t.Error("Expected error with invalid URL")
 	}
@@ -204,7 +207,7 @@ func TestWithRetention(t *testing.T) {
 	}
 	defer store.Close()
 
-	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	coll, err := New(ctx, testClusterID, sourceURL, store, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}
@@ -233,7 +236,7 @@ func TestCollectAndCleanup(t *testing.T) {
 	}
 	defer store.Close()
 
-	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	coll, err := New(ctx, testClusterID, sourceURL, store, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}
@@ -246,7 +249,7 @@ func TestCollectAndCleanup(t *testing.T) {
 	coll.collectAndCleanup(ctx)
 
 	// Verify collection happened (cleanup may have removed old data)
-	snapshot, err := store.GetLatestSnapshot(ctx)
+	snapshot, err := store.GetLatestSnapshot(ctx, testClusterID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
 	}
@@ -267,7 +270,7 @@ func TestCleanupWithRetention(t *testing.T) {
 	}
 	defer store.Close()
 
-	coll, err := New(ctx, sourceURL, store, 15*time.Minute)
+	coll, err := New(ctx, testClusterID, sourceURL, store, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}

@@ -57,32 +57,42 @@ Open http://localhost:8080 to view the changes dashboard.
 
 ### 3. Export data (optional)
 
-Export all changes to a zipped CSV file:
+Export changes to a zipped CSV file:
 
 ```bash
+# Export default cluster
 ./crdb-cluster-history export
 
-# Or specify output path
-./crdb-cluster-history export my-export.zip
+# Export specific cluster (by config ID)
+./crdb-cluster-history export --cluster prod
+
+# Export all clusters (creates one CSV per cluster)
+./crdb-cluster-history export --all
+
+# Specify output path
+./crdb-cluster-history export --all my-export.zip
 ```
 
 The export includes the cluster ID from `crdb_internal.cluster_id()`.
 
 ## Features
 
-- Periodically collects `SHOW CLUSTER SETTINGS` from a CockroachDB cluster
+- **Multi-cluster monitoring**: Monitor multiple CockroachDB clusters from a single instance
+- **Side-by-side comparison**: Compare settings between clusters to identify differences
+- Periodically collects `SHOW CLUSTER SETTINGS` from CockroachDB clusters
 - Stores snapshots in a separate CockroachDB database for history
 - Detects and records changes (modified, added, removed settings)
 - Tracks database version at the time of each change
 - **Annotations**: Add notes to changes explaining why settings were modified (e.g., "Increased buffer size due to OOM - JIRA-1234")
 - Web UI displays a table of changes with timestamps, version, and old/new values
+- **Cluster selector**: Switch between clusters in the UI (when monitoring multiple clusters)
 - Real-time search filter to quickly find settings
 - Download CSV button to export changes directly from the web UI
 - Hover over setting names to see their descriptions
 - Displays cluster ID and database version in the header
 - Configurable polling interval (1 minute to monthly)
 - Configurable data retention with automatic cleanup
-- CLI export command for scripted exports
+- CLI export command for scripted exports (supports single or all clusters)
 - Dark/light mode based on system preference
 - Health check endpoint for monitoring
 - Supports both secure and insecure CockroachDB clusters
@@ -145,10 +155,43 @@ podman compose up -d
 
 ## Configuration
 
-### Environment Variables
+### Multi-Cluster Configuration (YAML)
+
+To monitor multiple clusters, create a `clusters.yaml` file:
+
+```yaml
+history_database_url: "postgresql://history_user@localhost:26257/cluster_history?sslmode=disable"
+poll_interval: 15m
+retention: 720h  # 30 days
+http_port: "8080"
+
+clusters:
+  - name: "Production"
+    id: "prod"
+    database_url: "postgresql://readonly@prod-cluster:26257/defaultdb?sslmode=require"
+  - name: "Staging"
+    id: "staging"
+    database_url: "postgresql://readonly@staging-cluster:26257/defaultdb?sslmode=disable"
+  - name: "Development"
+    id: "dev"
+    database_url: "postgresql://root@localhost:26257/defaultdb?sslmode=disable"
+```
+
+Configuration is loaded in this order:
+1. `CLUSTERS_CONFIG` environment variable (path to YAML file)
+2. `clusters.yaml` in the current directory
+3. Environment variables (single-cluster mode, backward compatible)
+
+When multiple clusters are configured:
+- A cluster selector dropdown appears in the UI
+- A "Compare Clusters" button allows side-by-side comparison
+- Each cluster is collected independently
+
+### Environment Variables (Single-Cluster Mode)
 
 | Variable | Command | Description | Default |
 |----------|---------|-------------|---------|
+| `CLUSTERS_CONFIG` | server | Path to YAML configuration file | - |
 | `DATABASE_URL` | all | CockroachDB connection string. For `init`: admin connection. For server/export: monitored cluster | required |
 | `HISTORY_DATABASE_URL` | server, export | Connection to history database | required |
 | `POLL_INTERVAL` | server | How often to collect settings (Go duration) | `15m` |
@@ -236,6 +279,7 @@ docker-compose -f docker-compose.secure.yml up -d
 
 ## Architecture
 
+### Single-Cluster Mode
 ```
 ┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
 │  CockroachDB    │────▶│  Collector   │────▶│  CockroachDB    │
@@ -249,11 +293,30 @@ docker-compose -f docker-compose.secure.yml up -d
                                             └─────────────┘
 ```
 
+### Multi-Cluster Mode
+```
+┌─────────────────┐
+│  Production     │──┐
+│  CockroachDB    │  │
+└─────────────────┘  │     ┌──────────────┐     ┌─────────────────┐
+                     ├────▶│  Collector   │────▶│  CockroachDB    │
+┌─────────────────┐  │     │  Manager     │     │  (history db)   │
+│  Staging        │──┤     └──────────────┘     └─────────────────┘
+│  CockroachDB    │  │                                 │
+└─────────────────┘  │                                 ▼
+                     │                         ┌─────────────┐
+┌─────────────────┐  │                         │  Web Server │
+│  Development    │──┘                         │  (diff UI)  │
+│  CockroachDB    │                            │  + compare  │
+└─────────────────┘                            └─────────────┘
+```
+
 ### Components
 
+- **Collector Manager**: Manages multiple collectors, one per monitored cluster
 - **Collector**: Periodically queries `SHOW CLUSTER SETTINGS` and stores snapshots, tracks database version
-- **Storage**: Manages history database, detects changes between snapshots, stores metadata (cluster ID, version)
-- **Web Server**: Displays changes with search filter, download button, and version tracking
+- **Storage**: Manages history database, detects changes between snapshots, stores metadata per cluster
+- **Web Server**: Displays changes with search filter, cluster selector, comparison page, and download button
 
 ### Database Schema
 
@@ -261,8 +324,10 @@ docker-compose -f docker-compose.secure.yml up -d
 -- Snapshots of settings at a point in time
 CREATE TABLE snapshots (
     id SERIAL PRIMARY KEY,
+    cluster_id TEXT NOT NULL DEFAULT 'default',
     collected_at TIMESTAMPTZ NOT NULL
 );
+CREATE INDEX idx_snapshots_cluster ON snapshots(cluster_id, collected_at DESC);
 
 -- Individual settings within each snapshot
 CREATE TABLE settings (
@@ -277,6 +342,7 @@ CREATE TABLE settings (
 -- Detected changes between snapshots
 CREATE TABLE changes (
     id SERIAL PRIMARY KEY,
+    cluster_id TEXT NOT NULL DEFAULT 'default',
     detected_at TIMESTAMPTZ NOT NULL,
     variable TEXT NOT NULL,
     old_value TEXT,
@@ -284,6 +350,7 @@ CREATE TABLE changes (
     description TEXT,
     version TEXT  -- Database version at time of change (e.g., "v25.4.2")
 );
+CREATE INDEX idx_changes_cluster ON changes(cluster_id, detected_at DESC);
 
 -- User annotations/comments on changes
 CREATE TABLE annotations (
@@ -298,9 +365,11 @@ CREATE TABLE annotations (
 
 -- Key-value metadata (cluster_id, database_version, etc.)
 CREATE TABLE metadata (
-    key TEXT PRIMARY KEY,
+    cluster_id TEXT NOT NULL DEFAULT 'default',
+    key TEXT NOT NULL,
     value TEXT NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (cluster_id, key)
 );
 ```
 
@@ -309,8 +378,13 @@ CREATE TABLE metadata (
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Main dashboard with changes table, search, and download button |
+| `/?cluster={id}` | GET | Dashboard filtered to specific cluster |
+| `/compare` | GET | Side-by-side cluster comparison page |
 | `/health` | GET | Health check endpoint (returns "ok" if database is accessible) |
 | `/export` | GET | Download changes as zipped CSV file |
+| `/export?cluster={id}` | GET | Download changes for specific cluster |
+| `/api/clusters` | GET | List configured clusters (JSON) |
+| `/api/compare?cluster1={id}&cluster2={id}` | GET | Compare settings between two clusters (JSON) |
 | `/api/annotations` | POST | Create a new annotation for a change |
 | `/api/annotations/{id}` | GET | Retrieve an annotation |
 | `/api/annotations/{id}` | PUT | Update an annotation |

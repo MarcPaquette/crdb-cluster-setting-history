@@ -172,6 +172,34 @@
         .export-btn:hover {
             opacity: 0.9;
         }
+        .cluster-select {
+            padding: 8px 12px;
+            font-size: 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            min-width: 150px;
+        }
+        .cluster-select:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+        .compare-btn {
+            padding: 8px 16px;
+            font-size: 14px;
+            border: 1px solid var(--accent-color);
+            border-radius: 4px;
+            background: transparent;
+            color: var(--accent-color);
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .compare-btn:hover {
+            background: var(--accent-color);
+            color: white;
+        }
         .notes-btn {
             background: transparent;
             border: 1px solid var(--border-color);
@@ -281,11 +309,21 @@
         {{if .DatabaseVersion}}<div class="cluster-id">Version: {{.DatabaseVersion}}</div>{{end}}
 
         <div class="controls">
+            {{if gt (len .Clusters) 1}}
+            <select id="clusterSelector" class="cluster-select" onchange="selectCluster(this.value)">
+                {{range .Clusters}}
+                <option value="{{.ID}}" {{if eq .ID $.CurrentCluster}}selected{{end}}>{{.Name}}</option>
+                {{end}}
+            </select>
+            {{end}}
             <input type="text" id="searchBox" class="search-box" placeholder="Search settings...">
             <label>
                 <input type="checkbox" id="autoRefresh"> Auto-refresh (30s)
             </label>
-            <a href="/export" class="export-btn">Download CSV</a>
+            <a href="/export{{if .CurrentCluster}}?cluster={{.CurrentCluster}}{{end}}" class="export-btn">Download CSV</a>
+            {{if gt (len .Clusters) 1}}
+            <a href="/compare" class="compare-btn">Compare Clusters</a>
+            {{end}}
         </div>
 
         {{if .Changes}}
@@ -493,6 +531,13 @@
         document.getElementById('noteModal').addEventListener('click', function(e) {
             if (e.target === this) closeModal();
         });
+
+        // Cluster selection
+        function selectCluster(clusterID) {
+            const url = new URL(window.location.href);
+            url.searchParams.set('cluster', clusterID);
+            window.location.href = url.toString();
+        }
     </script>
 </body>
 </html>

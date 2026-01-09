@@ -8,10 +8,12 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"crdb-cluster-history/config"
 	"crdb-cluster-history/storage"
 
 	"github.com/jackc/pgx/v5"
@@ -44,9 +46,11 @@ var templateFS embed.FS
 
 // Server handles HTTP requests for the web UI.
 type Server struct {
-	store    *storage.Store
-	tmpl     *template.Template
-	redactor *storage.Redactor
+	store            *storage.Store
+	tmpl             *template.Template
+	redactor         *storage.Redactor
+	defaultClusterID string                 // Default cluster ID for single-cluster mode
+	clusters         []config.ClusterConfig // List of configured clusters
 }
 
 // Option configures the Server.
@@ -56,6 +60,20 @@ type Option func(*Server)
 func WithRedactor(r *storage.Redactor) Option {
 	return func(s *Server) {
 		s.redactor = r
+	}
+}
+
+// WithDefaultClusterID sets the default cluster ID for the server.
+func WithDefaultClusterID(clusterID string) Option {
+	return func(s *Server) {
+		s.defaultClusterID = clusterID
+	}
+}
+
+// WithClusters sets the list of configured clusters.
+func WithClusters(clusters []config.ClusterConfig) Option {
+	return func(s *Server) {
+		s.clusters = clusters
 	}
 }
 
@@ -79,8 +97,9 @@ func New(store *storage.Store, opts ...Option) (*Server, error) {
 	}
 
 	s := &Server{
-		store: store,
-		tmpl:  tmpl,
+		store:            store,
+		tmpl:             tmpl,
+		defaultClusterID: "default", // Default for backward compatibility
 	}
 
 	for _, opt := range opts {
@@ -90,11 +109,23 @@ func New(store *storage.Store, opts ...Option) (*Server, error) {
 	return s, nil
 }
 
+// getClusterID returns the cluster ID from the request, or the default.
+func (s *Server) getClusterID(r *http.Request) string {
+	clusterID := r.URL.Query().Get("cluster")
+	if clusterID == "" {
+		return s.defaultClusterID
+	}
+	return clusterID
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/export", s.handleExport)
+	mux.HandleFunc("/compare", s.handleCompare)
+	mux.HandleFunc("/api/clusters", s.handleAPIClusters)
+	mux.HandleFunc("/api/compare", s.handleAPICompare)
 	mux.HandleFunc("/api/annotations", s.handleAnnotations)
 	mux.HandleFunc("/api/annotations/", s.handleAnnotationByID)
 	return mux
@@ -102,7 +133,8 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Simple health check - verify we can query the database
-	_, err := s.store.GetChanges(r.Context(), 1)
+	clusterID := s.getClusterID(r)
+	_, err := s.store.GetChanges(r.Context(), clusterID, 1)
 	if err != nil {
 		http.Error(w, "unhealthy", http.StatusServiceUnavailable)
 		return
@@ -113,8 +145,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	clusterID := s.getClusterID(r)
 
-	changes, err := s.store.GetChangesWithAnnotations(ctx, 100)
+	changes, err := s.store.GetChangesWithAnnotations(ctx, clusterID, 100)
 	if err != nil {
 		log.Printf("Error getting changes: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -126,13 +159,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		changes = s.redactChangesWithAnnotations(changes)
 	}
 
-	clusterID, err := s.store.GetClusterID(ctx)
+	sourceClusterID, err := s.store.GetSourceClusterID(ctx, clusterID)
 	if err != nil {
-		log.Printf("Error getting cluster ID: %v", err)
+		log.Printf("Error getting source cluster ID: %v", err)
 		// Don't fail, just leave it empty
 	}
 
-	dbVersion, err := s.store.GetDatabaseVersion(ctx)
+	dbVersion, err := s.store.GetDatabaseVersion(ctx, clusterID)
 	if err != nil {
 		log.Printf("Error getting database version: %v", err)
 		// Don't fail, just leave it empty
@@ -140,12 +173,16 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	data := struct {
 		ClusterID       string
+		CurrentCluster  string
 		DatabaseVersion string
 		Changes         []storage.ChangeWithAnnotation
+		Clusters        []config.ClusterConfig
 	}{
-		ClusterID:       clusterID,
+		ClusterID:       sourceClusterID,
+		CurrentCluster:  clusterID,
 		DatabaseVersion: dbVersion,
 		Changes:         changes,
+		Clusters:        s.clusters,
 	}
 
 	if err := s.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
@@ -156,9 +193,10 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	clusterID := s.getClusterID(r)
 
 	// Get all changes
-	changes, err := s.store.GetChanges(ctx, 100000)
+	changes, err := s.store.GetChanges(ctx, clusterID, 100000)
 	if err != nil {
 		log.Printf("Error getting changes for export: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -170,11 +208,14 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		changes = s.redactor.RedactChanges(changes)
 	}
 
-	// Get cluster ID for filename and CSV
-	clusterID, err := s.store.GetClusterID(ctx)
+	// Get source cluster ID for filename and CSV
+	sourceClusterID, err := s.store.GetSourceClusterID(ctx, clusterID)
 	if err != nil {
-		log.Printf("Error getting cluster ID: %v", err)
-		clusterID = "unknown"
+		log.Printf("Error getting source cluster ID: %v", err)
+		sourceClusterID = clusterID
+	}
+	if sourceClusterID == "" {
+		sourceClusterID = clusterID
 	}
 
 	// Set headers for zip download
@@ -187,7 +228,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	defer zipWriter.Close()
 
 	// Create CSV file inside zip
-	csvFileName := fmt.Sprintf("crdb-cluster-history-%s.csv", clusterID)
+	csvFileName := fmt.Sprintf("crdb-cluster-history-%s.csv", sourceClusterID)
 	csvFile, err := zipWriter.Create(csvFileName)
 	if err != nil {
 		log.Printf("Error creating CSV in zip: %v", err)
@@ -196,9 +237,149 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write CSV
-	if err := storage.WriteChangesCSV(csvFile, clusterID, changes); err != nil {
+	if err := storage.WriteChangesCSV(csvFile, sourceClusterID, changes); err != nil {
 		log.Printf("Error writing CSV: %v", err)
 	}
+}
+
+// ClusterInfo represents cluster information for the API response.
+type ClusterInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// handleAPIClusters returns the list of configured clusters as JSON.
+func (s *Server) handleAPIClusters(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	clusters := make([]ClusterInfo, len(s.clusters))
+	for i, c := range s.clusters {
+		clusters[i] = ClusterInfo{ID: c.ID, Name: c.Name}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(clusters)
+}
+
+// CompareResult represents the comparison between two clusters.
+type CompareResult struct {
+	Cluster1Only []SettingDiff `json:"cluster1_only"`
+	Cluster2Only []SettingDiff `json:"cluster2_only"`
+	Different    []SettingDiff `json:"different"`
+}
+
+// SettingDiff represents a difference in a setting between clusters.
+type SettingDiff struct {
+	Variable    string `json:"variable"`
+	Value1      string `json:"value1,omitempty"`
+	Value2      string `json:"value2,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// handleCompare renders the comparison page.
+func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
+	data := struct {
+		Clusters []config.ClusterConfig
+	}{
+		Clusters: s.clusters,
+	}
+
+	if err := s.tmpl.ExecuteTemplate(w, "compare.html", data); err != nil {
+		log.Printf("Template error: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// handleAPICompare returns the comparison data between two clusters as JSON.
+func (s *Server) handleAPICompare(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cluster1 := r.URL.Query().Get("cluster1")
+	cluster2 := r.URL.Query().Get("cluster2")
+
+	if cluster1 == "" || cluster2 == "" {
+		s.jsonError(w, "cluster1 and cluster2 query parameters are required", http.StatusBadRequest)
+		return
+	}
+
+	if cluster1 == cluster2 {
+		s.jsonError(w, "cluster1 and cluster2 must be different", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Get settings for both clusters
+	settings1, err := s.store.GetLatestSnapshot(ctx, cluster1)
+	if err != nil {
+		log.Printf("Error getting settings for cluster %s: %v", cluster1, err)
+		s.jsonError(w, "Failed to get settings for cluster1", http.StatusInternalServerError)
+		return
+	}
+
+	settings2, err := s.store.GetLatestSnapshot(ctx, cluster2)
+	if err != nil {
+		log.Printf("Error getting settings for cluster %s: %v", cluster2, err)
+		s.jsonError(w, "Failed to get settings for cluster2", http.StatusInternalServerError)
+		return
+	}
+
+	// Compare settings
+	result := CompareResult{
+		Cluster1Only: []SettingDiff{},
+		Cluster2Only: []SettingDiff{},
+		Different:    []SettingDiff{},
+	}
+
+	// Find settings only in cluster1 or different
+	for variable, setting1 := range settings1 {
+		setting2, exists := settings2[variable]
+		if !exists {
+			result.Cluster1Only = append(result.Cluster1Only, SettingDiff{
+				Variable:    variable,
+				Value1:      setting1.Value,
+				Description: setting1.Description,
+			})
+		} else if setting1.Value != setting2.Value {
+			result.Different = append(result.Different, SettingDiff{
+				Variable:    variable,
+				Value1:      setting1.Value,
+				Value2:      setting2.Value,
+				Description: setting1.Description,
+			})
+		}
+	}
+
+	// Find settings only in cluster2
+	for variable, setting2 := range settings2 {
+		if _, exists := settings1[variable]; !exists {
+			result.Cluster2Only = append(result.Cluster2Only, SettingDiff{
+				Variable:    variable,
+				Value2:      setting2.Value,
+				Description: setting2.Description,
+			})
+		}
+	}
+
+	// Sort results by variable name
+	sort.Slice(result.Cluster1Only, func(i, j int) bool {
+		return result.Cluster1Only[i].Variable < result.Cluster1Only[j].Variable
+	})
+	sort.Slice(result.Cluster2Only, func(i, j int) bool {
+		return result.Cluster2Only[i].Variable < result.Cluster2Only[j].Variable
+	})
+	sort.Slice(result.Different, func(i, j int) bool {
+		return result.Different[i].Variable < result.Different[j].Variable
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 // handleAnnotations handles POST /api/annotations to create a new annotation.

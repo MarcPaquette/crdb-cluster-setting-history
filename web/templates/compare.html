@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compare Clusters - CockroachDB Cluster Settings History</title>
+    <style>
+        :root {
+            --bg-primary: #f5f5f5;
+            --bg-secondary: white;
+            --text-primary: #333;
+            --text-secondary: #666;
+            --border-color: #eee;
+            --shadow-color: rgba(0,0,0,0.1);
+            --accent-color: #6933ff;
+            --hover-bg: #f9f9f9;
+            --old-value-bg: #fee;
+            --old-value-text: #c00;
+            --new-value-bg: #efe;
+            --new-value-text: #080;
+            --em-text: #999;
+            --warning-bg: #fff3cd;
+            --warning-text: #856404;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-primary: #1a1a1a;
+                --bg-secondary: #2d2d2d;
+                --text-primary: #e0e0e0;
+                --text-secondary: #a0a0a0;
+                --border-color: #404040;
+                --shadow-color: rgba(0,0,0,0.3);
+                --accent-color: #8b5cf6;
+                --hover-bg: #363636;
+                --old-value-bg: #3d1f1f;
+                --old-value-text: #f87171;
+                --new-value-bg: #1f3d1f;
+                --new-value-text: #4ade80;
+                --em-text: #707070;
+                --warning-bg: #3d3219;
+                --warning-text: #fcd34d;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+        }
+        h1, h2 {
+            color: var(--text-primary);
+            margin-bottom: 5px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .back-link {
+            color: var(--accent-color);
+            text-decoration: none;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+        .back-link:hover {
+            text-decoration: underline;
+        }
+        .controls {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+            color: var(--text-secondary);
+        }
+        .cluster-select {
+            padding: 8px 12px;
+            font-size: 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            min-width: 150px;
+        }
+        .cluster-select:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+        .compare-btn {
+            padding: 8px 16px;
+            font-size: 14px;
+            border: none;
+            border-radius: 4px;
+            background: var(--accent-color);
+            color: white;
+            cursor: pointer;
+        }
+        .compare-btn:hover {
+            opacity: 0.9;
+        }
+        .compare-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-secondary);
+            box-shadow: 0 1px 3px var(--shadow-color);
+            margin-bottom: 30px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        th {
+            background: var(--accent-color);
+            color: white;
+            font-weight: 500;
+        }
+        tr:hover {
+            background: var(--hover-bg);
+        }
+        .value {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+        .cluster1-value {
+            color: var(--old-value-text);
+            background: var(--old-value-bg);
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        .cluster2-value {
+            color: var(--new-value-text);
+            background: var(--new-value-bg);
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        .variable {
+            font-weight: 500;
+            cursor: help;
+        }
+        .variable[title]:hover {
+            text-decoration: underline dotted;
+        }
+        em {
+            color: var(--em-text);
+        }
+        .section-header {
+            margin-top: 30px;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: var(--bg-secondary);
+            border-radius: 4px;
+            border-left: 4px solid var(--accent-color);
+        }
+        .section-header h2 {
+            margin: 0;
+            font-size: 16px;
+        }
+        .section-header .count {
+            color: var(--text-secondary);
+            font-weight: normal;
+            font-size: 14px;
+        }
+        .no-results {
+            padding: 20px;
+            text-align: center;
+            color: var(--text-secondary);
+            background: var(--bg-secondary);
+            border-radius: 4px;
+        }
+        .loading {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+        .hidden {
+            display: none;
+        }
+        .vs-text {
+            font-weight: bold;
+            color: var(--text-secondary);
+            padding: 0 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/" class="back-link">&larr; Back to Changes</a>
+        <h1>Compare Cluster Settings</h1>
+
+        <div class="controls">
+            <select id="cluster1" class="cluster-select">
+                <option value="">Select Cluster 1</option>
+                {{range .Clusters}}
+                <option value="{{.ID}}">{{.Name}}</option>
+                {{end}}
+            </select>
+            <span class="vs-text">vs</span>
+            <select id="cluster2" class="cluster-select">
+                <option value="">Select Cluster 2</option>
+                {{range .Clusters}}
+                <option value="{{.ID}}">{{.Name}}</option>
+                {{end}}
+            </select>
+            <button id="compareBtn" class="compare-btn" disabled>Compare</button>
+        </div>
+
+        <div id="loading" class="loading hidden">Loading comparison...</div>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const cluster1Select = document.getElementById('cluster1');
+        const cluster2Select = document.getElementById('cluster2');
+        const compareBtn = document.getElementById('compareBtn');
+        const resultsDiv = document.getElementById('results');
+        const loadingDiv = document.getElementById('loading');
+
+        function updateButtonState() {
+            const c1 = cluster1Select.value;
+            const c2 = cluster2Select.value;
+            compareBtn.disabled = !c1 || !c2 || c1 === c2;
+        }
+
+        cluster1Select.addEventListener('change', updateButtonState);
+        cluster2Select.addEventListener('change', updateButtonState);
+
+        compareBtn.addEventListener('click', async function() {
+            const c1 = cluster1Select.value;
+            const c2 = cluster2Select.value;
+
+            if (!c1 || !c2 || c1 === c2) return;
+
+            resultsDiv.innerHTML = '';
+            loadingDiv.classList.remove('hidden');
+            compareBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/compare?cluster1=' + encodeURIComponent(c1) + '&cluster2=' + encodeURIComponent(c2));
+                if (!response.ok) {
+                    throw new Error('Failed to compare clusters');
+                }
+                const data = await response.json();
+                renderResults(data, c1, c2);
+            } catch (e) {
+                resultsDiv.innerHTML = '<div class="no-results">Error: ' + e.message + '</div>';
+            } finally {
+                loadingDiv.classList.add('hidden');
+                updateButtonState();
+            }
+        });
+
+        function getClusterName(id) {
+            const select = document.getElementById('cluster1');
+            for (const opt of select.options) {
+                if (opt.value === id) return opt.textContent;
+            }
+            return id;
+        }
+
+        function renderResults(data, c1, c2) {
+            const c1Name = getClusterName(c1);
+            const c2Name = getClusterName(c2);
+            let html = '';
+
+            // Different values section
+            if (data.different && data.different.length > 0) {
+                html += '<div class="section-header"><h2>Different Values <span class="count">(' + data.different.length + ')</span></h2></div>';
+                html += '<table><thead><tr><th>Setting</th><th>' + escapeHtml(c1Name) + '</th><th>' + escapeHtml(c2Name) + '</th></tr></thead><tbody>';
+                for (const diff of data.different) {
+                    html += '<tr>';
+                    html += '<td class="variable" title="' + escapeHtml(diff.description || '') + '">' + escapeHtml(diff.variable) + '</td>';
+                    html += '<td class="value"><span class="cluster1-value">' + escapeHtml(diff.value1) + '</span></td>';
+                    html += '<td class="value"><span class="cluster2-value">' + escapeHtml(diff.value2) + '</span></td>';
+                    html += '</tr>';
+                }
+                html += '</tbody></table>';
+            }
+
+            // Only in cluster1 section
+            if (data.cluster1_only && data.cluster1_only.length > 0) {
+                html += '<div class="section-header"><h2>Only in ' + escapeHtml(c1Name) + ' <span class="count">(' + data.cluster1_only.length + ')</span></h2></div>';
+                html += '<table><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>';
+                for (const diff of data.cluster1_only) {
+                    html += '<tr>';
+                    html += '<td class="variable" title="' + escapeHtml(diff.description || '') + '">' + escapeHtml(diff.variable) + '</td>';
+                    html += '<td class="value"><span class="cluster1-value">' + escapeHtml(diff.value1) + '</span></td>';
+                    html += '</tr>';
+                }
+                html += '</tbody></table>';
+            }
+
+            // Only in cluster2 section
+            if (data.cluster2_only && data.cluster2_only.length > 0) {
+                html += '<div class="section-header"><h2>Only in ' + escapeHtml(c2Name) + ' <span class="count">(' + data.cluster2_only.length + ')</span></h2></div>';
+                html += '<table><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody>';
+                for (const diff of data.cluster2_only) {
+                    html += '<tr>';
+                    html += '<td class="variable" title="' + escapeHtml(diff.description || '') + '">' + escapeHtml(diff.variable) + '</td>';
+                    html += '<td class="value"><span class="cluster2-value">' + escapeHtml(diff.value2) + '</span></td>';
+                    html += '</tr>';
+                }
+                html += '</tbody></table>';
+            }
+
+            if (!html) {
+                html = '<div class="no-results">No differences found between the clusters.</div>';
+            }
+
+            resultsDiv.innerHTML = html;
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

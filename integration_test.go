@@ -11,6 +11,9 @@ import (
 	"crdb-cluster-history/storage"
 )
 
+// testClusterID is used for all tests
+const testClusterID = "test-cluster"
+
 func TestFullIntegration(t *testing.T) {
 	adminURL := os.Getenv("DATABASE_URL")
 	if adminURL == "" {
@@ -48,7 +51,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// Step 3: Run collector once
 	t.Log("Step 3: Running collector...")
-	coll, err := collector.New(ctx, adminURL, store, time.Hour) // Interval doesn't matter, we call collect directly
+	coll, err := collector.New(ctx, testClusterID, adminURL, store, time.Hour) // Interval doesn't matter, we call collect directly
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}
@@ -62,7 +65,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// Step 4: Verify data was stored
 	t.Log("Step 4: Verifying stored data...")
-	changes, err := store.GetChanges(ctx, 10)
+	changes, err := store.GetChanges(ctx, testClusterID, 10)
 	if err != nil {
 		t.Fatalf("Failed to get changes: %v", err)
 	}
@@ -71,7 +74,7 @@ func TestFullIntegration(t *testing.T) {
 	t.Logf("Found %d changes after first collection (expected 0)", len(changes))
 
 	// Verify we can get the latest snapshot
-	snapshot, err := store.GetLatestSnapshot(ctx)
+	snapshot, err := store.GetLatestSnapshot(ctx, testClusterID)
 	if err != nil {
 		t.Fatalf("Failed to get latest snapshot: %v", err)
 	}

@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// testClusterID is used for all tests
+const testClusterID = "test-cluster"
+
 func getTestDB(t *testing.T) string {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
@@ -20,6 +23,7 @@ func getTestDB(t *testing.T) string {
 
 // cleanupTestData removes all test data from the database
 func cleanupTestData(t *testing.T, store *Store) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -57,13 +61,13 @@ func TestSaveAndGetSnapshot(t *testing.T) {
 		{Variable: "test.setting.two", Value: "value2", SettingType: "i", Description: "Test setting 2"},
 	}
 
-	err = store.SaveSnapshot(ctx, settings, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save snapshot: %v", err)
 	}
 
 	// Get the snapshot
-	snapshot, err := store.GetLatestSnapshot(ctx)
+	snapshot, err := store.GetLatestSnapshot(ctx, testClusterID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
 	}
@@ -93,7 +97,7 @@ func TestChangeDetection(t *testing.T) {
 	settings1 := []Setting{
 		{Variable: "change.test.setting", Value: "original", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -102,13 +106,13 @@ func TestChangeDetection(t *testing.T) {
 	settings2 := []Setting{
 		{Variable: "change.test.setting", Value: "modified", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings2, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
 
 	// Check for changes
-	changes, err := store.GetChanges(ctx, 100)
+	changes, err := store.GetChanges(ctx, testClusterID, 100)
 	if err != nil {
 		t.Fatalf("Failed to get changes: %v", err)
 	}
@@ -147,7 +151,7 @@ func TestNewSettingDetection(t *testing.T) {
 	settings1 := []Setting{
 		{Variable: "existing.setting", Value: "exists", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -158,13 +162,13 @@ func TestNewSettingDetection(t *testing.T) {
 		{Variable: "existing.setting", Value: "exists", SettingType: "s", Description: "Test"},
 		{Variable: uniqueName, Value: "new", SettingType: "s", Description: "New setting"},
 	}
-	err = store.SaveSnapshot(ctx, settings2, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
 
 	// Check for changes
-	changes, err := store.GetChanges(ctx, 100)
+	changes, err := store.GetChanges(ctx, testClusterID, 100)
 	if err != nil {
 		t.Fatalf("Failed to get changes: %v", err)
 	}
@@ -206,7 +210,7 @@ func TestRemovedSettingDetection(t *testing.T) {
 		{Variable: uniqueName, Value: "will-be-removed", SettingType: "s", Description: "Test"},
 		{Variable: "keeper.setting", Value: "stays", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -215,13 +219,13 @@ func TestRemovedSettingDetection(t *testing.T) {
 	settings2 := []Setting{
 		{Variable: "keeper.setting", Value: "stays", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings2, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
 
 	// Check for changes
-	changes, err := store.GetChanges(ctx, 100)
+	changes, err := store.GetChanges(ctx, testClusterID, 100)
 	if err != nil {
 		t.Fatalf("Failed to get changes: %v", err)
 	}
@@ -257,7 +261,7 @@ func TestGetChangesLimit(t *testing.T) {
 	defer store.Close()
 
 	// Get limited changes
-	changes, err := store.GetChanges(ctx, 5)
+	changes, err := store.GetChanges(ctx, testClusterID, 5)
 	if err != nil {
 		t.Fatalf("Failed to get changes: %v", err)
 	}
@@ -281,13 +285,13 @@ func TestCleanupOldSnapshots(t *testing.T) {
 	settings := []Setting{
 		{Variable: "cleanup.test.setting", Value: "value1", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save snapshot: %v", err)
 	}
 
 	// Cleanup with zero retention should delete everything
-	deleted, err := store.CleanupOldSnapshots(ctx, 0)
+	deleted, err := store.CleanupOldSnapshots(ctx, testClusterID, 0)
 	if err != nil {
 		t.Fatalf("Failed to cleanup snapshots: %v", err)
 	}
@@ -298,7 +302,7 @@ func TestCleanupOldSnapshots(t *testing.T) {
 	}
 
 	// Cleanup with long retention should delete nothing new
-	deleted, err = store.CleanupOldSnapshots(ctx, 24*time.Hour)
+	deleted, err = store.CleanupOldSnapshots(ctx, testClusterID, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Failed to cleanup snapshots: %v", err)
 	}
@@ -319,7 +323,7 @@ func TestCleanupOldChanges(t *testing.T) {
 	settings1 := []Setting{
 		{Variable: "cleanup.change.test", Value: "original", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -327,13 +331,13 @@ func TestCleanupOldChanges(t *testing.T) {
 	settings2 := []Setting{
 		{Variable: "cleanup.change.test", Value: "modified", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings2, "v1.0.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
 
 	// Cleanup with zero retention should delete everything
-	deleted, err := store.CleanupOldChanges(ctx, 0)
+	deleted, err := store.CleanupOldChanges(ctx, testClusterID, 0)
 	if err != nil {
 		t.Fatalf("Failed to cleanup changes: %v", err)
 	}
@@ -343,7 +347,7 @@ func TestCleanupOldChanges(t *testing.T) {
 	}
 
 	// Verify changes are gone
-	changes, err := store.GetChanges(ctx, 100)
+	changes, err := store.GetChanges(ctx, testClusterID, 100)
 	if err != nil {
 		t.Fatalf("Failed to get changes: %v", err)
 	}
@@ -363,13 +367,13 @@ func TestSetAndGetMetadata(t *testing.T) {
 	defer store.Close()
 
 	// Test setting metadata
-	err = store.SetMetadata(ctx, "test_key", "test_value")
+	err = store.SetMetadata(ctx, testClusterID, "test_key", "test_value")
 	if err != nil {
 		t.Fatalf("Failed to set metadata: %v", err)
 	}
 
 	// Test getting metadata
-	value, err := store.GetMetadata(ctx, "test_key")
+	value, err := store.GetMetadata(ctx, testClusterID, "test_key")
 	if err != nil {
 		t.Fatalf("Failed to get metadata: %v", err)
 	}
@@ -378,12 +382,12 @@ func TestSetAndGetMetadata(t *testing.T) {
 	}
 
 	// Test updating metadata
-	err = store.SetMetadata(ctx, "test_key", "updated_value")
+	err = store.SetMetadata(ctx, testClusterID, "test_key", "updated_value")
 	if err != nil {
 		t.Fatalf("Failed to update metadata: %v", err)
 	}
 
-	value, err = store.GetMetadata(ctx, "test_key")
+	value, err = store.GetMetadata(ctx, testClusterID, "test_key")
 	if err != nil {
 		t.Fatalf("Failed to get updated metadata: %v", err)
 	}
@@ -392,7 +396,7 @@ func TestSetAndGetMetadata(t *testing.T) {
 	}
 
 	// Test getting non-existent key
-	value, err = store.GetMetadata(ctx, "non_existent_key")
+	value, err = store.GetMetadata(ctx, testClusterID, "non_existent_key")
 	if err != nil {
 		t.Fatalf("Failed to get non-existent metadata: %v", err)
 	}
@@ -401,7 +405,7 @@ func TestSetAndGetMetadata(t *testing.T) {
 	}
 }
 
-func TestClusterIDMetadata(t *testing.T) {
+func TestSourceClusterIDMetadata(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -411,21 +415,21 @@ func TestClusterIDMetadata(t *testing.T) {
 	}
 	defer store.Close()
 
-	testClusterID := "test-cluster-id-12345"
+	sourceClusterID := "source-cluster-id-12345"
 
-	// Test setting cluster ID
-	err = store.SetClusterID(ctx, testClusterID)
+	// Test setting source cluster ID
+	err = store.SetSourceClusterID(ctx, testClusterID, sourceClusterID)
 	if err != nil {
-		t.Fatalf("Failed to set cluster ID: %v", err)
+		t.Fatalf("Failed to set source cluster ID: %v", err)
 	}
 
-	// Test getting cluster ID
-	clusterID, err := store.GetClusterID(ctx)
+	// Test getting source cluster ID
+	retrieved, err := store.GetSourceClusterID(ctx, testClusterID)
 	if err != nil {
-		t.Fatalf("Failed to get cluster ID: %v", err)
+		t.Fatalf("Failed to get source cluster ID: %v", err)
 	}
-	if clusterID != testClusterID {
-		t.Errorf("Expected '%s', got '%s'", testClusterID, clusterID)
+	if retrieved != sourceClusterID {
+		t.Errorf("Expected '%s', got '%s'", sourceClusterID, retrieved)
 	}
 }
 
@@ -442,13 +446,13 @@ func TestDatabaseVersionMetadata(t *testing.T) {
 	testVersion := "CockroachDB CCL v25.4.2"
 
 	// Test setting database version
-	err = store.SetDatabaseVersion(ctx, testVersion)
+	err = store.SetDatabaseVersion(ctx, testClusterID, testVersion)
 	if err != nil {
 		t.Fatalf("Failed to set database version: %v", err)
 	}
 
 	// Test getting database version
-	version, err := store.GetDatabaseVersion(ctx)
+	version, err := store.GetDatabaseVersion(ctx, testClusterID)
 	if err != nil {
 		t.Fatalf("Failed to get database version: %v", err)
 	}
@@ -476,7 +480,7 @@ func TestChangeWithVersion(t *testing.T) {
 	settings1 := []Setting{
 		{Variable: "version.test.setting", Value: "original", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1, testVersion)
+	err = store.SaveSnapshot(ctx, testClusterID, settings1, testVersion)
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -485,13 +489,13 @@ func TestChangeWithVersion(t *testing.T) {
 	settings2 := []Setting{
 		{Variable: "version.test.setting", Value: "modified", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, settings2, testVersion)
+	err = store.SaveSnapshot(ctx, testClusterID, settings2, testVersion)
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
 
 	// Check that changes include the version
-	changes, err := store.GetChanges(ctx, 100)
+	changes, err := store.GetChanges(ctx, testClusterID, 100)
 	if err != nil {
 		t.Fatalf("Failed to get changes: %v", err)
 	}
@@ -526,11 +530,11 @@ func TestAnnotationCRUD(t *testing.T) {
 	// Clean up and create a change to annotate
 	cleanupTestData(t, store)
 	settings1 := []Setting{{Variable: "annotation.test", Value: "v1", SettingType: "s", Description: "Test"}}
-	store.SaveSnapshot(ctx, settings1, "v1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0")
 	settings2 := []Setting{{Variable: "annotation.test", Value: "v2", SettingType: "s", Description: "Test"}}
-	store.SaveSnapshot(ctx, settings2, "v1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0")
 
-	changes, err := store.GetChangesWithAnnotations(ctx, 1)
+	changes, err := store.GetChangesWithAnnotations(ctx, testClusterID, 1)
 	if err != nil {
 		t.Fatalf("Failed to get changes: %v", err)
 	}
@@ -650,11 +654,11 @@ func TestAnnotationCascadeDelete(t *testing.T) {
 	// Create change and annotation
 	cleanupTestData(t, store)
 	settings1 := []Setting{{Variable: "cascade.test", Value: "v1", SettingType: "s", Description: "Test"}}
-	store.SaveSnapshot(ctx, settings1, "v1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0")
 	settings2 := []Setting{{Variable: "cascade.test", Value: "v2", SettingType: "s", Description: "Test"}}
-	store.SaveSnapshot(ctx, settings2, "v1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0")
 
-	changes, _ := store.GetChangesWithAnnotations(ctx, 1)
+	changes, _ := store.GetChangesWithAnnotations(ctx, testClusterID, 1)
 	if len(changes) == 0 {
 		t.Fatal("No changes found")
 	}
@@ -665,7 +669,7 @@ func TestAnnotationCascadeDelete(t *testing.T) {
 	}
 
 	// Delete all changes
-	store.CleanupOldChanges(ctx, 0)
+	store.CleanupOldChanges(ctx, testClusterID, 0)
 
 	// Annotation should be gone too
 	retrieved, _ := store.GetAnnotation(ctx, ann.ID)
@@ -688,19 +692,19 @@ func TestGetChangesWithAnnotations(t *testing.T) {
 
 	// Create changes
 	settings1 := []Setting{{Variable: "join.test.a", Value: "v1", SettingType: "s", Description: "Test A"}}
-	store.SaveSnapshot(ctx, settings1, "v1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0")
 	settings2 := []Setting{
 		{Variable: "join.test.a", Value: "v2", SettingType: "s", Description: "Test A"},
 		{Variable: "join.test.b", Value: "x1", SettingType: "s", Description: "Test B"},
 	}
-	store.SaveSnapshot(ctx, settings2, "v1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0")
 	settings3 := []Setting{
 		{Variable: "join.test.a", Value: "v2", SettingType: "s", Description: "Test A"},
 		{Variable: "join.test.b", Value: "x2", SettingType: "s", Description: "Test B"},
 	}
-	store.SaveSnapshot(ctx, settings3, "v1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings3, "v1.0")
 
-	changes, err := store.GetChangesWithAnnotations(ctx, 10)
+	changes, err := store.GetChangesWithAnnotations(ctx, testClusterID, 10)
 	if err != nil {
 		t.Fatalf("Failed to get changes with annotations: %v", err)
 	}
@@ -722,7 +726,7 @@ func TestGetChangesWithAnnotations(t *testing.T) {
 	}
 
 	// Re-fetch
-	changes, err = store.GetChangesWithAnnotations(ctx, 10)
+	changes, err = store.GetChangesWithAnnotations(ctx, testClusterID, 10)
 	if err != nil {
 		t.Fatalf("Failed to get changes with annotations: %v", err)
 	}
@@ -760,11 +764,11 @@ func TestAnnotationDuplicateFails(t *testing.T) {
 
 	cleanupTestData(t, store)
 	settings1 := []Setting{{Variable: "dup.test", Value: "v1", SettingType: "s", Description: "Test"}}
-	store.SaveSnapshot(ctx, settings1, "v1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0")
 	settings2 := []Setting{{Variable: "dup.test", Value: "v2", SettingType: "s", Description: "Test"}}
-	store.SaveSnapshot(ctx, settings2, "v1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0")
 
-	changes, _ := store.GetChangesWithAnnotations(ctx, 1)
+	changes, _ := store.GetChangesWithAnnotations(ctx, testClusterID, 1)
 	if len(changes) == 0 {
 		t.Fatal("No changes found")
 	}
@@ -780,5 +784,88 @@ func TestAnnotationDuplicateFails(t *testing.T) {
 	_, err = store.CreateAnnotation(ctx, changeID, "Second", "user")
 	if err == nil {
 		t.Error("Expected error for duplicate annotation on same change")
+	}
+}
+
+func TestListClusters(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Create snapshots for multiple clusters
+	settings := []Setting{{Variable: "list.test", Value: "v1", SettingType: "s", Description: "Test"}}
+
+	store.SaveSnapshot(ctx, "list-cluster-alpha", settings, "v1.0")
+	store.SaveSnapshot(ctx, "list-cluster-beta", settings, "v1.0")
+	store.SaveSnapshot(ctx, "list-cluster-gamma", settings, "v1.0")
+
+	clusters, err := store.ListClusters(ctx)
+	if err != nil {
+		t.Fatalf("ListClusters failed: %v", err)
+	}
+
+	// Should contain at least the 3 clusters we created
+	clusterMap := make(map[string]bool)
+	for _, c := range clusters {
+		clusterMap[c] = true
+	}
+
+	for _, expected := range []string{"list-cluster-alpha", "list-cluster-beta", "list-cluster-gamma"} {
+		if !clusterMap[expected] {
+			t.Errorf("ListClusters() missing %q", expected)
+		}
+	}
+}
+
+func TestMultiClusterChanges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Create changes for two different clusters
+	settingsA1 := []Setting{{Variable: "multi.test.setting", Value: "a1", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, "multi-cluster-a", settingsA1, "v1.0")
+	settingsA2 := []Setting{{Variable: "multi.test.setting", Value: "a2", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, "multi-cluster-a", settingsA2, "v1.0")
+
+	settingsB1 := []Setting{{Variable: "multi.test.setting", Value: "b1", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, "multi-cluster-b", settingsB1, "v1.0")
+	settingsB2 := []Setting{{Variable: "multi.test.setting", Value: "b2", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, "multi-cluster-b", settingsB2, "v1.0")
+
+	// Get changes for cluster A
+	changesA, err := store.GetChanges(ctx, "multi-cluster-a", 100)
+	if err != nil {
+		t.Fatalf("GetChanges(multi-cluster-a) failed: %v", err)
+	}
+
+	// All changes should be for cluster A
+	for _, c := range changesA {
+		if c.ClusterID != "multi-cluster-a" {
+			t.Errorf("Expected ClusterID 'multi-cluster-a', got %q", c.ClusterID)
+		}
+	}
+
+	// Get changes for cluster B
+	changesB, err := store.GetChanges(ctx, "multi-cluster-b", 100)
+	if err != nil {
+		t.Fatalf("GetChanges(multi-cluster-b) failed: %v", err)
+	}
+
+	// All changes should be for cluster B
+	for _, c := range changesB {
+		if c.ClusterID != "multi-cluster-b" {
+			t.Errorf("Expected ClusterID 'multi-cluster-b', got %q", c.ClusterID)
+		}
 	}
 }

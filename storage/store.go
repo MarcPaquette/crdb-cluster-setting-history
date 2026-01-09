@@ -18,6 +18,7 @@ type Setting struct {
 }
 
 type Change struct {
+	ClusterID   string // Which cluster this change belongs to
 	DetectedAt  time.Time
 	Variable    string
 	OldValue    string
@@ -205,18 +206,119 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		}
 	}
 
+	// Multi-cluster support: Add cluster_id column to snapshots table
+	if err := addClusterIDColumn(ctx, pool, "snapshots"); err != nil {
+		return err
+	}
+
+	// Multi-cluster support: Add cluster_id column to changes table
+	if err := addClusterIDColumn(ctx, pool, "changes"); err != nil {
+		return err
+	}
+
+	// Multi-cluster support: Migrate metadata table to support per-cluster metadata
+	if err := migrateMetadataForMultiCluster(ctx, pool); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func (s *Store) GetLatestSnapshot(ctx context.Context) (map[string]Setting, error) {
-	return s.getLatestSnapshotWith(ctx, s.pool)
+// addClusterIDColumn adds cluster_id column to a table if it doesn't exist.
+// Existing rows get 'default' as their cluster_id for backward compatibility.
+func addClusterIDColumn(ctx context.Context, pool *pgxpool.Pool, tableName string) error {
+	var hasClusterIDColumn bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = $1 AND column_name = 'cluster_id'
+		)
+	`, tableName).Scan(&hasClusterIDColumn)
+	if err != nil {
+		return err
+	}
+
+	if !hasClusterIDColumn {
+		// Add column with default value for existing rows
+		_, err = pool.Exec(ctx, "ALTER TABLE "+tableName+" ADD COLUMN cluster_id TEXT NOT NULL DEFAULT 'default'")
+		if err != nil {
+			return err
+		}
+
+		// Create index for efficient cluster-based queries
+		indexName := "idx_" + tableName + "_cluster"
+		orderColumn := "collected_at"
+		if tableName == "changes" {
+			orderColumn = "detected_at"
+		}
+		_, err = pool.Exec(ctx, "CREATE INDEX IF NOT EXISTS "+indexName+" ON "+tableName+"(cluster_id, "+orderColumn+" DESC)")
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// migrateMetadataForMultiCluster adds cluster_id to metadata table and updates primary key.
+func migrateMetadataForMultiCluster(ctx context.Context, pool *pgxpool.Pool) error {
+	var hasClusterIDColumn bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'metadata' AND column_name = 'cluster_id'
+		)
+	`).Scan(&hasClusterIDColumn)
+	if err != nil {
+		return err
+	}
+
+	if !hasClusterIDColumn {
+		// Add cluster_id column with default value
+		_, err = pool.Exec(ctx, "ALTER TABLE metadata ADD COLUMN cluster_id TEXT NOT NULL DEFAULT 'default'")
+		if err != nil {
+			return err
+		}
+	}
+
+	// Check if primary key already includes cluster_id
+	var pkIncludesClusterID bool
+	err = pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.key_column_usage
+			WHERE table_name = 'metadata'
+			AND column_name = 'cluster_id'
+			AND constraint_name = 'metadata_pkey'
+		)
+	`).Scan(&pkIncludesClusterID)
+	if err != nil {
+		return err
+	}
+
+	if !pkIncludesClusterID {
+		// Drop old primary key and add new composite primary key in one statement
+		// CockroachDB requires both operations in the same ALTER TABLE statement
+		_, err = pool.Exec(ctx, "ALTER TABLE metadata DROP CONSTRAINT metadata_pkey, ADD PRIMARY KEY (cluster_id, key)")
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) GetLatestSnapshot(ctx context.Context, clusterID string) (map[string]Setting, error) {
+	return s.getLatestSnapshotWith(ctx, s.pool, clusterID)
 }
 
 // getLatestSnapshotWith retrieves the latest snapshot using the provided querier.
 // This allows the same logic to be used with either a pool or a transaction.
-func (s *Store) getLatestSnapshotWith(ctx context.Context, q querier) (map[string]Setting, error) {
+func (s *Store) getLatestSnapshotWith(ctx context.Context, q querier, clusterID string) (map[string]Setting, error) {
 	var snapshotID int64
-	err := q.QueryRow(ctx, "SELECT id FROM snapshots ORDER BY collected_at DESC LIMIT 1").Scan(&snapshotID)
+	err := q.QueryRow(ctx,
+		"SELECT id FROM snapshots WHERE cluster_id = $1 ORDER BY collected_at DESC LIMIT 1",
+		clusterID,
+	).Scan(&snapshotID)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -245,7 +347,7 @@ func (s *Store) getLatestSnapshotWith(ctx context.Context, q querier) (map[strin
 	return settings, rows.Err()
 }
 
-func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting, version string) error {
+func (s *Store) SaveSnapshot(ctx context.Context, clusterID string, settings []Setting, version string) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -255,7 +357,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting, version st
 	now := time.Now()
 
 	// Get previous settings for comparison (inside transaction to avoid race condition)
-	prevSettings, err := s.getLatestSnapshotWith(ctx, tx)
+	prevSettings, err := s.getLatestSnapshotWith(ctx, tx, clusterID)
 	if err != nil {
 		return err
 	}
@@ -263,8 +365,8 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting, version st
 	// Create new snapshot
 	var snapshotID int64
 	err = tx.QueryRow(ctx,
-		"INSERT INTO snapshots (collected_at) VALUES ($1) RETURNING id",
-		now,
+		"INSERT INTO snapshots (cluster_id, collected_at) VALUES ($1, $2) RETURNING id",
+		clusterID, now,
 	).Scan(&snapshotID)
 	if err != nil {
 		return err
@@ -286,15 +388,15 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting, version st
 		if prev, exists := prevSettings[variable]; exists {
 			if prev.Value != current.Value {
 				batch.Queue(
-					"INSERT INTO changes (detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6)",
-					now, variable, prev.Value, current.Value, current.Description, version,
+					"INSERT INTO changes (cluster_id, detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+					clusterID, now, variable, prev.Value, current.Value, current.Description, version,
 				)
 			}
 		} else if prevSettings != nil {
 			// New setting (only record if we had previous snapshot)
 			batch.Queue(
-				"INSERT INTO changes (detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6)",
-				now, variable, nil, current.Value, current.Description, version,
+				"INSERT INTO changes (cluster_id, detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+				clusterID, now, variable, nil, current.Value, current.Description, version,
 			)
 		}
 	}
@@ -303,8 +405,8 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting, version st
 	for variable, prev := range prevSettings {
 		if _, exists := currentSettings[variable]; !exists {
 			batch.Queue(
-				"INSERT INTO changes (detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6)",
-				now, variable, prev.Value, nil, prev.Description, version,
+				"INSERT INTO changes (cluster_id, detected_at, variable, old_value, new_value, description, version) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+				clusterID, now, variable, prev.Value, nil, prev.Description, version,
 			)
 		}
 	}
@@ -318,10 +420,10 @@ func (s *Store) SaveSnapshot(ctx context.Context, settings []Setting, version st
 	return tx.Commit(ctx)
 }
 
-func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
+func (s *Store) GetChanges(ctx context.Context, clusterID string, limit int) ([]Change, error) {
 	rows, err := s.pool.Query(ctx,
-		"SELECT detected_at, variable, old_value, new_value, description, version FROM changes ORDER BY detected_at DESC LIMIT $1",
-		limit,
+		"SELECT cluster_id, detected_at, variable, old_value, new_value, description, version FROM changes WHERE cluster_id = $1 ORDER BY detected_at DESC LIMIT $2",
+		clusterID, limit,
 	)
 	if err != nil {
 		return nil, err
@@ -332,7 +434,7 @@ func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
 	for rows.Next() {
 		var c Change
 		var oldValue, newValue, description, version *string
-		if err := rows.Scan(&c.DetectedAt, &c.Variable, &oldValue, &newValue, &description, &version); err != nil {
+		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &oldValue, &newValue, &description, &version); err != nil {
 			return nil, err
 		}
 		if oldValue != nil {
@@ -353,13 +455,49 @@ func (s *Store) GetChanges(ctx context.Context, limit int) ([]Change, error) {
 	return changes, rows.Err()
 }
 
-// CleanupOldSnapshots removes snapshots older than the specified duration.
+// GetAllChanges retrieves changes for all clusters (used for export).
+func (s *Store) GetAllChanges(ctx context.Context, limit int) ([]Change, error) {
+	rows, err := s.pool.Query(ctx,
+		"SELECT cluster_id, detected_at, variable, old_value, new_value, description, version FROM changes ORDER BY detected_at DESC LIMIT $1",
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var changes []Change
+	for rows.Next() {
+		var c Change
+		var oldValue, newValue, description, version *string
+		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &oldValue, &newValue, &description, &version); err != nil {
+			return nil, err
+		}
+		if oldValue != nil {
+			c.OldValue = *oldValue
+		}
+		if newValue != nil {
+			c.NewValue = *newValue
+		}
+		if description != nil {
+			c.Description = *description
+		}
+		if version != nil {
+			c.Version = *version
+		}
+		changes = append(changes, c)
+	}
+
+	return changes, rows.Err()
+}
+
+// CleanupOldSnapshots removes snapshots older than the specified duration for a specific cluster.
 // Associated settings are automatically deleted via ON DELETE CASCADE.
-func (s *Store) CleanupOldSnapshots(ctx context.Context, retention time.Duration) (int64, error) {
+func (s *Store) CleanupOldSnapshots(ctx context.Context, clusterID string, retention time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-retention)
 	result, err := s.pool.Exec(ctx,
-		"DELETE FROM snapshots WHERE collected_at < $1",
-		cutoff,
+		"DELETE FROM snapshots WHERE cluster_id = $1 AND collected_at < $2",
+		clusterID, cutoff,
 	)
 	if err != nil {
 		return 0, err
@@ -367,12 +505,12 @@ func (s *Store) CleanupOldSnapshots(ctx context.Context, retention time.Duration
 	return result.RowsAffected(), nil
 }
 
-// CleanupOldChanges removes change records older than the specified duration.
-func (s *Store) CleanupOldChanges(ctx context.Context, retention time.Duration) (int64, error) {
+// CleanupOldChanges removes change records older than the specified duration for a specific cluster.
+func (s *Store) CleanupOldChanges(ctx context.Context, clusterID string, retention time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-retention)
 	result, err := s.pool.Exec(ctx,
-		"DELETE FROM changes WHERE detected_at < $1",
-		cutoff,
+		"DELETE FROM changes WHERE cluster_id = $1 AND detected_at < $2",
+		clusterID, cutoff,
 	)
 	if err != nil {
 		return 0, err
@@ -380,22 +518,22 @@ func (s *Store) CleanupOldChanges(ctx context.Context, retention time.Duration) 
 	return result.RowsAffected(), nil
 }
 
-// SetMetadata stores a key-value pair in the metadata table.
-func (s *Store) SetMetadata(ctx context.Context, key, value string) error {
+// SetMetadata stores a key-value pair in the metadata table for a specific cluster.
+func (s *Store) SetMetadata(ctx context.Context, clusterID, key, value string) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO metadata (key, value, updated_at) VALUES ($1, $2, NOW())
-		 ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-		key, value,
+		`INSERT INTO metadata (cluster_id, key, value, updated_at) VALUES ($1, $2, $3, NOW())
+		 ON CONFLICT (cluster_id, key) DO UPDATE SET value = $3, updated_at = NOW()`,
+		clusterID, key, value,
 	)
 	return err
 }
 
-// GetMetadata retrieves a value from the metadata table.
-func (s *Store) GetMetadata(ctx context.Context, key string) (string, error) {
+// GetMetadata retrieves a value from the metadata table for a specific cluster.
+func (s *Store) GetMetadata(ctx context.Context, clusterID, key string) (string, error) {
 	var value string
 	err := s.pool.QueryRow(ctx,
-		"SELECT value FROM metadata WHERE key = $1",
-		key,
+		"SELECT value FROM metadata WHERE cluster_id = $1 AND key = $2",
+		clusterID, key,
 	).Scan(&value)
 	if err == pgx.ErrNoRows {
 		return "", nil
@@ -403,24 +541,52 @@ func (s *Store) GetMetadata(ctx context.Context, key string) (string, error) {
 	return value, err
 }
 
-// GetClusterID retrieves the stored cluster ID.
-func (s *Store) GetClusterID(ctx context.Context) (string, error) {
-	return s.GetMetadata(ctx, "cluster_id")
+// GetSourceClusterID retrieves the source cluster's unique ID (from crdb_internal.cluster_id()).
+func (s *Store) GetSourceClusterID(ctx context.Context, clusterID string) (string, error) {
+	return s.GetMetadata(ctx, clusterID, "source_cluster_id")
 }
 
-// SetClusterID stores the cluster ID.
-func (s *Store) SetClusterID(ctx context.Context, clusterID string) error {
-	return s.SetMetadata(ctx, "cluster_id", clusterID)
+// SetSourceClusterID stores the source cluster's unique ID.
+func (s *Store) SetSourceClusterID(ctx context.Context, clusterID, sourceClusterID string) error {
+	return s.SetMetadata(ctx, clusterID, "source_cluster_id", sourceClusterID)
 }
 
-// GetDatabaseVersion retrieves the stored database version.
-func (s *Store) GetDatabaseVersion(ctx context.Context) (string, error) {
-	return s.GetMetadata(ctx, "database_version")
+// GetDatabaseVersion retrieves the stored database version for a specific cluster.
+func (s *Store) GetDatabaseVersion(ctx context.Context, clusterID string) (string, error) {
+	return s.GetMetadata(ctx, clusterID, "database_version")
 }
 
-// SetDatabaseVersion stores the database version.
-func (s *Store) SetDatabaseVersion(ctx context.Context, version string) error {
-	return s.SetMetadata(ctx, "database_version", version)
+// SetDatabaseVersion stores the database version for a specific cluster.
+func (s *Store) SetDatabaseVersion(ctx context.Context, clusterID, version string) error {
+	return s.SetMetadata(ctx, clusterID, "database_version", version)
+}
+
+// ListClusters returns all distinct cluster IDs that have data.
+func (s *Store) ListClusters(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT cluster_id FROM (
+			SELECT cluster_id FROM snapshots
+			UNION
+			SELECT cluster_id FROM changes
+			UNION
+			SELECT cluster_id FROM metadata
+		) ORDER BY cluster_id`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clusters []string
+	for rows.Next() {
+		var clusterID string
+		if err := rows.Scan(&clusterID); err != nil {
+			return nil, err
+		}
+		clusters = append(clusters, clusterID)
+	}
+
+	return clusters, rows.Err()
 }
 
 // WriteChangesCSV writes changes to a CSV format.
@@ -549,15 +715,16 @@ func (s *Store) DeleteAnnotation(ctx context.Context, id int64) error {
 }
 
 // GetChangesWithAnnotations retrieves changes with their annotations using a LEFT JOIN.
-func (s *Store) GetChangesWithAnnotations(ctx context.Context, limit int) ([]ChangeWithAnnotation, error) {
+func (s *Store) GetChangesWithAnnotations(ctx context.Context, clusterID string, limit int) ([]ChangeWithAnnotation, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT c.id, c.detected_at, c.variable, c.old_value, c.new_value, c.description, c.version,
+		`SELECT c.id, c.cluster_id, c.detected_at, c.variable, c.old_value, c.new_value, c.description, c.version,
 		        a.id, a.content, a.created_by, a.created_at, a.updated_by, a.updated_at
 		 FROM changes c
 		 LEFT JOIN annotations a ON a.change_id = c.id
+		 WHERE c.cluster_id = $1
 		 ORDER BY c.detected_at DESC
-		 LIMIT $1`,
-		limit,
+		 LIMIT $2`,
+		clusterID, limit,
 	)
 	if err != nil {
 		return nil, err
@@ -573,7 +740,7 @@ func (s *Store) GetChangesWithAnnotations(ctx context.Context, limit int) ([]Cha
 		var annCreatedAt, annUpdatedAt *time.Time
 
 		err := rows.Scan(
-			&cwa.ID, &cwa.DetectedAt, &cwa.Variable, &oldValue, &newValue, &description, &version,
+			&cwa.ID, &cwa.ClusterID, &cwa.DetectedAt, &cwa.Variable, &oldValue, &newValue, &description, &version,
 			&annID, &annContent, &annCreatedBy, &annCreatedAt, &annUpdatedBy, &annUpdatedAt,
 		)
 		if err != nil {
@@ -614,4 +781,9 @@ func (s *Store) GetChangesWithAnnotations(ctx context.Context, limit int) ([]Cha
 	}
 
 	return results, rows.Err()
+}
+
+// GetLatestSettings retrieves the current settings for a cluster (for comparison).
+func (s *Store) GetLatestSettings(ctx context.Context, clusterID string) (map[string]Setting, error) {
+	return s.GetLatestSnapshot(ctx, clusterID)
 }

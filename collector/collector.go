@@ -17,11 +17,12 @@ var versionRegex = regexp.MustCompile(`v\d+\.\d+\.\d+`)
 type Collector struct {
 	pool      *pgxpool.Pool
 	store     *storage.Store
+	clusterID string        // Config cluster ID (e.g., "prod", "staging")
 	interval  time.Duration
 	retention time.Duration
 }
 
-func New(ctx context.Context, connString string, store *storage.Store, interval time.Duration) (*Collector, error) {
+func New(ctx context.Context, clusterID, connString string, store *storage.Store, interval time.Duration) (*Collector, error) {
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
 		return nil, err
@@ -34,9 +35,15 @@ func New(ctx context.Context, connString string, store *storage.Store, interval 
 	return &Collector{
 		pool:      pool,
 		store:     store,
+		clusterID: clusterID,
 		interval:  interval,
 		retention: 0, // No cleanup by default
 	}, nil
+}
+
+// ClusterID returns the cluster ID for this collector.
+func (c *Collector) ClusterID() string {
+	return c.clusterID
 }
 
 func (c *Collector) Close() {
@@ -68,40 +75,45 @@ func (c *Collector) Start(ctx context.Context) {
 
 func (c *Collector) collectAndCleanup(ctx context.Context) {
 	if err := c.collect(ctx); err != nil {
-		log.Printf("Collection error: %v", err)
+		log.Printf("[%s] Collection error: %v", c.clusterID, err)
 	}
 
 	if c.retention > 0 {
 		if err := c.cleanup(ctx); err != nil {
-			log.Printf("Cleanup error: %v", err)
+			log.Printf("[%s] Cleanup error: %v", c.clusterID, err)
 		}
 	}
 }
 
+// Collect triggers an immediate collection. Useful for testing or manual triggers.
+func (c *Collector) Collect(ctx context.Context) error {
+	return c.collect(ctx)
+}
+
 func (c *Collector) cleanup(ctx context.Context) error {
-	snapshots, err := c.store.CleanupOldSnapshots(ctx, c.retention)
+	snapshots, err := c.store.CleanupOldSnapshots(ctx, c.clusterID, c.retention)
 	if err != nil {
 		return err
 	}
-	changes, err := c.store.CleanupOldChanges(ctx, c.retention)
+	changes, err := c.store.CleanupOldChanges(ctx, c.clusterID, c.retention)
 	if err != nil {
 		return err
 	}
 	if snapshots > 0 || changes > 0 {
-		log.Printf("Cleanup: removed %d snapshots, %d changes", snapshots, changes)
+		log.Printf("[%s] Cleanup: removed %d snapshots, %d changes", c.clusterID, snapshots, changes)
 	}
 	return nil
 }
 
 func (c *Collector) collect(ctx context.Context) error {
-	log.Printf("Collecting cluster settings...")
+	log.Printf("[%s] Collecting cluster settings...", c.clusterID)
 
-	// Fetch and store cluster ID and version (only updates if changed)
-	if err := c.updateClusterID(ctx); err != nil {
-		log.Printf("Warning: failed to update cluster ID: %v", err)
+	// Fetch and store source cluster ID and version (only updates if changed)
+	if err := c.updateSourceClusterID(ctx); err != nil {
+		log.Printf("[%s] Warning: failed to update source cluster ID: %v", c.clusterID, err)
 	}
 	if err := c.updateDatabaseVersion(ctx); err != nil {
-		log.Printf("Warning: failed to update database version: %v", err)
+		log.Printf("[%s] Warning: failed to update database version: %v", c.clusterID, err)
 	}
 
 	// Get the short version for storing with changes
@@ -128,11 +140,11 @@ func (c *Collector) collect(ctx context.Context) error {
 		return err
 	}
 
-	if err := c.store.SaveSnapshot(ctx, settings, shortVersion); err != nil {
+	if err := c.store.SaveSnapshot(ctx, c.clusterID, settings, shortVersion); err != nil {
 		return err
 	}
 
-	log.Printf("Collected %d settings", len(settings))
+	log.Printf("[%s] Collected %d settings", c.clusterID, len(settings))
 	return nil
 }
 
@@ -150,13 +162,13 @@ func (c *Collector) getShortVersion(ctx context.Context) string {
 	return fullVersion
 }
 
-func (c *Collector) updateClusterID(ctx context.Context) error {
-	var clusterID string
-	err := c.pool.QueryRow(ctx, "SELECT crdb_internal.cluster_id()::TEXT").Scan(&clusterID)
+func (c *Collector) updateSourceClusterID(ctx context.Context) error {
+	var sourceClusterID string
+	err := c.pool.QueryRow(ctx, "SELECT crdb_internal.cluster_id()::TEXT").Scan(&sourceClusterID)
 	if err != nil {
 		return err
 	}
-	return c.store.SetClusterID(ctx, clusterID)
+	return c.store.SetSourceClusterID(ctx, c.clusterID, sourceClusterID)
 }
 
 func (c *Collector) updateDatabaseVersion(ctx context.Context) error {
@@ -165,5 +177,5 @@ func (c *Collector) updateDatabaseVersion(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.store.SetDatabaseVersion(ctx, version)
+	return c.store.SetDatabaseVersion(ctx, c.clusterID, version)
 }

@@ -15,6 +15,7 @@ import (
 	"crdb-cluster-history/auth"
 	"crdb-cluster-history/cmd"
 	"crdb-cluster-history/collector"
+	"crdb-cluster-history/config"
 	"crdb-cluster-history/storage"
 	"crdb-cluster-history/web"
 )
@@ -49,18 +50,35 @@ func main() {
 
 func runExport() {
 	sourceURL := os.Getenv("DATABASE_URL")
-	if sourceURL == "" {
-		log.Fatal("DATABASE_URL environment variable is required")
-	}
-
 	historyURL := os.Getenv("HISTORY_DATABASE_URL")
 	if historyURL == "" {
 		log.Fatal("HISTORY_DATABASE_URL environment variable is required")
 	}
 
+	// Parse export arguments
 	outputPath := ""
-	if len(os.Args) > 2 {
-		outputPath = os.Args[2]
+	clusterID := ""
+	exportAll := false
+
+	for i := 2; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		switch {
+		case arg == "--all" || arg == "-a":
+			exportAll = true
+		case (arg == "--cluster" || arg == "-c") && i+1 < len(os.Args):
+			i++
+			clusterID = os.Args[i]
+		case len(arg) > 2 && arg[:2] == "-c":
+			clusterID = arg[2:]
+		case len(arg) > 10 && arg[:10] == "--cluster=":
+			clusterID = arg[10:]
+		case len(arg) > 0 && arg[0] != '-':
+			outputPath = arg
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown export flag: %s\n", arg)
+			fmt.Fprintln(os.Stderr, "Usage: crdb-cluster-history export [--all|-a] [--cluster|-c ID] [output-path]")
+			os.Exit(1)
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -70,6 +88,8 @@ func runExport() {
 		SourceURL:  sourceURL,
 		HistoryURL: historyURL,
 		OutputPath: outputPath,
+		ClusterID:  clusterID,
+		ExportAll:  exportAll,
 	}
 
 	if err := cmd.RunExport(ctx, cfg); err != nil {
@@ -104,23 +124,27 @@ func runInit() {
 }
 
 func runServer() {
-	// DATABASE_URL: Connection to the CockroachDB cluster being monitored (read-only access to SHOW CLUSTER SETTINGS)
-	sourceURL := os.Getenv("DATABASE_URL")
-	if sourceURL == "" {
-		log.Fatal("DATABASE_URL environment variable is required")
+	// Load configuration (tries CLUSTERS_CONFIG, clusters.yaml, then env vars)
+	cfg, err := config.LoadAuto()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// HISTORY_DATABASE_URL: Connection to store history data (separate database, separate user with read/write access)
-	historyURL := os.Getenv("HISTORY_DATABASE_URL")
-	if historyURL == "" {
-		log.Fatal("HISTORY_DATABASE_URL environment variable is required")
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
 	}
 
-	pollInterval := getEnvDuration("POLL_INTERVAL", 15*time.Minute)
-	retention := getEnvDuration("RETENTION", 0) // 0 means no cleanup
-	httpPort := getEnv("HTTP_PORT", "8080")
+	// Log configuration mode
+	if len(cfg.Clusters) > 1 {
+		log.Printf("Multi-cluster mode: monitoring %d clusters", len(cfg.Clusters))
+		for _, c := range cfg.Clusters {
+			log.Printf("  - %s (%s)", c.Name, c.ID)
+		}
+	} else {
+		log.Printf("Single-cluster mode: monitoring cluster '%s'", cfg.Clusters[0].ID)
+	}
 
-	// Security configuration
+	// Security configuration (still from env vars for now)
 	tlsEnabled := getEnvBool("TLS_ENABLED", false)
 	tlsCertFile := os.Getenv("TLS_CERT_FILE")
 	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
@@ -173,31 +197,50 @@ func runServer() {
 	defer cancel()
 
 	// Initialize storage (connects to history database)
-	store, err := storage.New(ctx, historyURL)
+	store, err := storage.New(ctx, cfg.HistoryDatabaseURL)
 	if err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}
 	defer store.Close()
 
-	// Initialize web server with redactor
-	webServer, err := web.New(store, web.WithRedactor(redactor))
+	// Initialize web server with clusters and redactor
+	webServer, err := web.New(store,
+		web.WithRedactor(redactor),
+		web.WithClusters(cfg.Clusters),
+		web.WithDefaultClusterID(cfg.Clusters[0].ID),
+	)
 	if err != nil {
 		log.Fatalf("Failed to initialize web server: %v", err)
 	}
 
-	// Initialize collector (reads from source database, writes to history database)
-	coll, err := collector.New(ctx, sourceURL, store, pollInterval)
-	if err != nil {
-		log.Fatalf("Failed to initialize collector: %v", err)
-	}
-	defer coll.Close()
+	// Initialize collectors based on configuration
+	var collectorManager *collector.Manager
+	var singleCollector *collector.Collector
 
-	if retention > 0 {
-		coll.WithRetention(retention)
-		log.Printf("Data retention: %v", retention)
-	}
+	if len(cfg.Clusters) > 1 {
+		// Multi-cluster mode: use manager
+		collectorManager, err = collector.NewManager(ctx, cfg, store)
+		if err != nil {
+			log.Fatalf("Failed to initialize collector manager: %v", err)
+		}
+		defer collectorManager.Close()
+		go collectorManager.Start(ctx)
+	} else {
+		// Single-cluster mode: use single collector
+		cluster := cfg.Clusters[0]
+		singleCollector, err = collector.New(ctx, cluster.ID, cluster.DatabaseURL, store, cfg.PollInterval.Duration())
+		if err != nil {
+			log.Fatalf("Failed to initialize collector: %v", err)
+		}
+		defer singleCollector.Close()
 
-	go coll.Start(ctx)
+		if cfg.Retention.Duration() > 0 {
+			singleCollector.WithRetention(cfg.Retention.Duration())
+			log.Printf("Data retention: %v", cfg.Retention.Duration())
+		}
+
+		go singleCollector.Start(ctx)
+	}
 
 	// Build handler with middleware chain
 	handler := web.ChainMiddleware(
@@ -209,7 +252,7 @@ func runServer() {
 
 	// Start HTTP(S) server with security timeouts
 	server := &http.Server{
-		Addr:              ":" + httpPort,
+		Addr:              ":" + cfg.HTTPPort,
 		Handler:           handler,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -228,12 +271,12 @@ func runServer() {
 
 	go func() {
 		if tlsEnabled {
-			log.Printf("Starting HTTPS server on https://localhost:%s", httpPort)
+			log.Printf("Starting HTTPS server on https://localhost:%s", cfg.HTTPPort)
 			if err := server.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != http.ErrServerClosed {
 				log.Fatalf("HTTPS server error: %v", err)
 			}
 		} else {
-			log.Printf("Starting HTTP server on http://localhost:%s", httpPort)
+			log.Printf("Starting HTTP server on http://localhost:%s", cfg.HTTPPort)
 			if err := server.ListenAndServe(); err != http.ErrServerClosed {
 				log.Fatalf("HTTP server error: %v", err)
 			}
@@ -261,7 +304,27 @@ Commands:
   export [path]  Export changes to a zipped CSV file (includes cluster_id)
   (none)         Run the cluster history server
 
-Environment Variables:
+Configuration:
+  The server can be configured via a YAML file or environment variables.
+  Configuration is loaded in this order:
+  1. CLUSTERS_CONFIG env var (path to YAML config file)
+  2. clusters.yaml in current directory
+  3. Environment variables (single-cluster mode)
+
+  Example clusters.yaml:
+    history_database_url: "postgresql://user@host:26257/cluster_history"
+    poll_interval: 15m
+    retention: 720h
+    http_port: "8080"
+    clusters:
+      - name: "Production"
+        id: "prod"
+        database_url: "postgresql://readonly@prod:26257/defaultdb"
+      - name: "Staging"
+        id: "staging"
+        database_url: "postgresql://readonly@staging:26257/defaultdb"
+
+Environment Variables (single-cluster mode):
   DATABASE_URL          CockroachDB connection string (required)
                         For 'init': admin connection to create database/user
                         For server/export: connection to monitored cluster

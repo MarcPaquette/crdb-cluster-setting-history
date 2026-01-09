@@ -1,0 +1,48 @@
+# CockroachDB Cluster Settings History - Multi-Cluster Configuration
+#
+# This file configures monitoring of multiple CockroachDB clusters.
+# Copy this file to clusters.yaml and modify for your environment.
+#
+# Configuration is loaded in this order:
+#   1. CLUSTERS_CONFIG environment variable (path to YAML file)
+#   2. clusters.yaml in the current directory
+#   3. Environment variables (single-cluster mode, backward compatible)
+
+# Connection to the history database where all cluster data is stored
+# This database is shared across all monitored clusters
+history_database_url: "postgresql://history_user@localhost:26257/cluster_history?sslmode=disable"
+
+# How often to collect settings from each cluster
+# Accepts Go duration format: 1m, 15m, 1h, 24h, etc.
+poll_interval: 15m
+
+# How long to retain historical data (optional, default: unlimited)
+# Set to 0 or omit for unlimited retention
+# Examples: 720h (30 days), 2160h (90 days), 8760h (1 year)
+retention: 720h
+
+# HTTP server port
+http_port: "8080"
+
+# List of CockroachDB clusters to monitor
+clusters:
+  # Production cluster
+  - name: "Production"           # Display name shown in the UI
+    id: "prod"                   # Unique identifier (alphanumeric, hyphens, underscores only)
+    database_url: "postgresql://readonly_user@prod-cluster.example.com:26257/defaultdb?sslmode=require"
+
+  # Staging cluster
+  - name: "Staging"
+    id: "staging"
+    database_url: "postgresql://readonly_user@staging-cluster.example.com:26257/defaultdb?sslmode=require"
+
+  # Development cluster (local)
+  - name: "Development"
+    id: "dev"
+    database_url: "postgresql://root@localhost:26257/defaultdb?sslmode=disable"
+
+# Notes:
+# - Each cluster needs read access to run "SHOW CLUSTER SETTINGS"
+# - The history database needs read/write access for the history_user
+# - Cluster IDs must be unique and contain only alphanumeric characters, hyphens, or underscores
+# - The first cluster in the list is used as the default when no cluster is specified

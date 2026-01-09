@@ -14,6 +14,9 @@ import (
 	"crdb-cluster-history/storage"
 )
 
+// testClusterID is used for all tests
+const testClusterID = "default"
+
 func getHistoryURL(t *testing.T) string {
 	url := os.Getenv("HISTORY_DATABASE_URL")
 	if url == "" {
@@ -118,13 +121,13 @@ func TestRunExport(t *testing.T) {
 	defer store.Close()
 
 	// Clean up any existing data
-	store.CleanupOldChanges(ctx, 0)
+	store.CleanupOldChanges(ctx, testClusterID, 0)
 
 	// Create some test changes
 	settings1 := []storage.Setting{
 		{Variable: "export.cli.test", Value: "original", SettingType: "s", Description: "CLI export test"},
 	}
-	err = store.SaveSnapshot(ctx, settings1, "v25.1.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings1, "v25.1.0")
 	if err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
@@ -132,7 +135,7 @@ func TestRunExport(t *testing.T) {
 	settings2 := []storage.Setting{
 		{Variable: "export.cli.test", Value: "modified", SettingType: "s", Description: "CLI export test"},
 	}
-	err = store.SaveSnapshot(ctx, settings2, "v25.1.0")
+	err = store.SaveSnapshot(ctx, testClusterID, settings2, "v25.1.0")
 	if err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
@@ -243,17 +246,17 @@ func TestRunExportDefaultPath(t *testing.T) {
 	}
 	defer store.Close()
 
-	store.CleanupOldChanges(ctx, 0)
+	store.CleanupOldChanges(ctx, testClusterID, 0)
 
 	settings1 := []storage.Setting{
 		{Variable: "export.default.test", Value: "v1", SettingType: "s", Description: "Test"},
 	}
-	store.SaveSnapshot(ctx, settings1, "v25.1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings1, "v25.1.0")
 
 	settings2 := []storage.Setting{
 		{Variable: "export.default.test", Value: "v2", SettingType: "s", Description: "Test"},
 	}
-	store.SaveSnapshot(ctx, settings2, "v25.1.0")
+	store.SaveSnapshot(ctx, testClusterID, settings2, "v25.1.0")
 
 	// Change to temp directory to avoid polluting workspace
 	originalDir, _ := os.Getwd()
