@@ -9,6 +9,8 @@ import (
 	"crdb-cluster-history/cmd"
 	"crdb-cluster-history/collector"
 	"crdb-cluster-history/storage"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // testClusterID is used for all tests
@@ -26,6 +28,36 @@ func TestFullIntegration(t *testing.T) {
 	// Use a unique database name for testing
 	dbName := "cluster_history_test"
 	username := "history_test_user"
+
+	// Register cleanup to remove test database and user after test completes
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+
+		conn, err := pgx.Connect(cleanupCtx, adminURL)
+		if err != nil {
+			t.Logf("Cleanup: failed to connect for cleanup: %v", err)
+			return
+		}
+		defer conn.Close(cleanupCtx)
+
+		// Drop database first (this will disconnect any active sessions)
+		_, err = conn.Exec(cleanupCtx, "DROP DATABASE IF EXISTS "+pgx.Identifier{dbName}.Sanitize()+" CASCADE")
+		if err != nil {
+			t.Logf("Cleanup: failed to drop database: %v", err)
+		}
+
+		// Revoke default privileges before dropping user
+		conn.Exec(cleanupCtx, "ALTER DEFAULT PRIVILEGES FOR ROLE root REVOKE ALL ON TABLES FROM "+pgx.Identifier{username}.Sanitize())
+
+		// Drop user
+		_, err = conn.Exec(cleanupCtx, "DROP USER IF EXISTS "+pgx.Identifier{username}.Sanitize())
+		if err != nil {
+			t.Logf("Cleanup: failed to drop user: %v", err)
+		}
+
+		t.Log("Cleanup: test database and user removed")
+	})
 
 	// Step 1: Initialize database and user
 	t.Log("Step 1: Initializing database and user...")
