@@ -37,7 +37,10 @@ export HISTORY_PASSWORD="your_secure_password"
 The init command will:
 - Create the `cluster_history` database
 - Create the `history_user` user
-- Grant necessary privileges
+- Grant least-privilege permissions:
+  - Database level: `CONNECT`, `CREATE` (for initial schema migration)
+  - Table level: `SELECT`, `INSERT`, `UPDATE`, `DELETE` only
+  - Does NOT grant: `DROP`, `ALTER`, or admin privileges
 - Detect insecure mode automatically (skips password in insecure mode)
 
 ### 2. Run the service
@@ -380,11 +383,14 @@ CREATE TABLE metadata (
 | `/` | GET | Main dashboard with changes table, search, and download button |
 | `/?cluster={id}` | GET | Dashboard filtered to specific cluster |
 | `/compare` | GET | Side-by-side cluster comparison page |
+| `/history` | GET | Time-based snapshot comparison page |
 | `/health` | GET | Health check endpoint (returns "ok" if database is accessible) |
 | `/export` | GET | Download changes as zipped CSV file |
 | `/export?cluster={id}` | GET | Download changes for specific cluster |
 | `/api/clusters` | GET | List configured clusters (JSON) |
 | `/api/compare?cluster1={id}&cluster2={id}` | GET | Compare settings between two clusters (JSON) |
+| `/api/snapshots?cluster={id}&limit={n}` | GET | List snapshots for a cluster (JSON) |
+| `/api/compare-snapshots?snapshot1={id}&snapshot2={id}` | GET | Compare two snapshots (JSON) |
 | `/api/annotations` | POST | Create a new annotation for a change |
 | `/api/annotations/{id}` | GET | Retrieve an annotation |
 | `/api/annotations/{id}` | PUT | Update an annotation |
