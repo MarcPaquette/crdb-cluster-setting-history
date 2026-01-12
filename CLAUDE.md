@@ -46,6 +46,14 @@ The service monitors a CockroachDB cluster by periodically querying `SHOW CLUSTE
 - `DATABASE_URL` - The cluster being monitored (read-only access needed)
 - `HISTORY_DATABASE_URL` - Separate database for storing history (read/write)
 
+**Security - Least Privilege Model:**
+The `init` command creates a history user with minimal required privileges:
+- **Database level:** `CONNECT`, `CREATE` (CREATE needed for initial schema migration)
+- **Table level:** `SELECT`, `INSERT`, `UPDATE`, `DELETE` only (via default privileges)
+- **NOT granted:** `DROP`, `ALTER`, admin privileges, or full database ownership
+
+This ensures the history user can only perform data operations on its tables and cannot drop the database, modify schema after creation, or perform administrative actions.
+
 **Environment variables:**
 - `POLL_INTERVAL` - Collection interval (default: 15m)
 - `RETENTION` - Data retention period, e.g., 720h for 30 days (default: unlimited)

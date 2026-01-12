@@ -73,22 +73,25 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 		}
 	}
 
-	// Grant privileges on database
-	log.Printf("Granting privileges on database %q to user %q...", cfg.DatabaseName, cfg.Username)
-	_, err = conn.Exec(ctx, fmt.Sprintf("GRANT ALL ON DATABASE %s TO %s",
+	// Grant minimal database-level privileges (least privilege principle)
+	// - CONNECT: required to connect to the database
+	// - CREATE: required for initial schema migration (creating tables)
+	log.Printf("Granting database-level privileges on %q to user %q...", cfg.DatabaseName, cfg.Username)
+	_, err = conn.Exec(ctx, fmt.Sprintf("GRANT CONNECT, CREATE ON DATABASE %s TO %s",
 		pgx.Identifier{cfg.DatabaseName}.Sanitize(),
 		pgx.Identifier{cfg.Username}.Sanitize()))
 	if err != nil {
 		return fmt.Errorf("failed to grant database privileges: %w", err)
 	}
 
-	// Switch to the new database and set default privileges
-	log.Printf("Setting default privileges...")
+	// Switch to the new database and set default table privileges
+	log.Printf("Setting default table privileges (SELECT, INSERT, UPDATE, DELETE only)...")
 	_, err = conn.Exec(ctx, fmt.Sprintf("USE %s", pgx.Identifier{cfg.DatabaseName}.Sanitize()))
 	if err != nil {
 		log.Printf("Warning: could not switch to database: %v", err)
 	} else {
-		_, err = conn.Exec(ctx, fmt.Sprintf("ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO %s",
+		// Grant only data manipulation privileges on tables - not DROP, ALTER, etc.
+		_, err = conn.Exec(ctx, fmt.Sprintf("ALTER DEFAULT PRIVILEGES GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s",
 			pgx.Identifier{cfg.Username}.Sanitize()))
 		if err != nil {
 			// This might fail if not supported, log but continue
