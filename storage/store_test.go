@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"os"
 	"strings"
@@ -116,7 +118,7 @@ func cleanupTestData(t *testing.T, store *Store) {
 
 func TestNew(t *testing.T) {
 	// Longer timeout for first connection - schema migration can be slow
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	store, err := New(ctx, getTestDB(t))
@@ -332,7 +334,7 @@ func TestRemovedSettingDetection(t *testing.T) {
 }
 
 func TestGetChangesLimit(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	store, err := New(ctx, getTestDB(t))
@@ -341,14 +343,55 @@ func TestGetChangesLimit(t *testing.T) {
 	}
 	defer store.Close()
 
-	// Get limited changes
-	changes, err := store.GetChanges(ctx, testClusterID, 5)
+	// Use a unique cluster ID to isolate this test
+	clusterID := "limit-test-" + time.Now().Format("20060102150405.000")
+
+	// Create more than 5 changes by modifying a setting multiple times
+	baseSettings := []Setting{
+		{Variable: "limit.test.setting", Value: "initial", SettingType: "s", Description: "Test"},
+	}
+	err = store.SaveSnapshot(ctx, clusterID, baseSettings, "v1.0.0")
 	if err != nil {
-		t.Fatalf("Failed to get changes: %v", err)
+		t.Fatalf("Failed to save initial snapshot: %v", err)
 	}
 
-	if len(changes) > 5 {
-		t.Errorf("Expected at most 5 changes, got %d", len(changes))
+	// Create 7 changes (need 8 snapshots total to get 7 changes)
+	for i := range 7 {
+		settings := []Setting{
+			{Variable: "limit.test.setting", Value: fmt.Sprintf("value%d", i), SettingType: "s", Description: "Test"},
+		}
+		err = store.SaveSnapshot(ctx, clusterID, settings, "v1.0.0")
+		if err != nil {
+			t.Fatalf("Failed to save snapshot %d: %v", i, err)
+		}
+	}
+
+	// Verify we have more than 5 changes
+	allChanges, err := store.GetChanges(ctx, clusterID, 100)
+	if err != nil {
+		t.Fatalf("Failed to get all changes: %v", err)
+	}
+	if len(allChanges) < 6 {
+		t.Fatalf("Expected at least 6 changes for limit test, got %d", len(allChanges))
+	}
+
+	// Now test the limit
+	limitedChanges, err := store.GetChanges(ctx, clusterID, 5)
+	if err != nil {
+		t.Fatalf("Failed to get limited changes: %v", err)
+	}
+
+	if len(limitedChanges) != 5 {
+		t.Errorf("Expected exactly 5 changes with limit, got %d", len(limitedChanges))
+	}
+
+	// Verify limit=1 returns exactly 1
+	oneChange, err := store.GetChanges(ctx, clusterID, 1)
+	if err != nil {
+		t.Fatalf("Failed to get single change: %v", err)
+	}
+	if len(oneChange) != 1 {
+		t.Errorf("Expected exactly 1 change with limit=1, got %d", len(oneChange))
 	}
 }
 
@@ -362,32 +405,64 @@ func TestCleanupOldSnapshots(t *testing.T) {
 	}
 	defer store.Close()
 
-	// Save a snapshot
+	// Use a unique cluster ID to isolate this test
+	clusterID := "cleanup-snapshot-test-" + time.Now().Format("20060102150405.000")
+
+	// Save multiple snapshots
 	settings := []Setting{
 		{Variable: "cleanup.test.setting", Value: "value1", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, testClusterID, settings, "v1.0.0")
+	for range 3 {
+		err = store.SaveSnapshot(ctx, clusterID, settings, "v1.0.0")
+		if err != nil {
+			t.Fatalf("Failed to save snapshot: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond) // Ensure different timestamps
+	}
+
+	// Verify snapshots were created
+	snapshots, err := store.ListSnapshots(ctx, clusterID, 10)
 	if err != nil {
-		t.Fatalf("Failed to save snapshot: %v", err)
+		t.Fatalf("Failed to list snapshots: %v", err)
+	}
+	if len(snapshots) < 3 {
+		t.Fatalf("Expected at least 3 snapshots, got %d", len(snapshots))
 	}
 
 	// Cleanup with zero retention should delete everything
-	deleted, err := store.CleanupOldSnapshots(ctx, testClusterID, 0)
+	deleted, err := store.CleanupOldSnapshots(ctx, clusterID, 0)
 	if err != nil {
 		t.Fatalf("Failed to cleanup snapshots: %v", err)
 	}
-
-	// Should have deleted at least the one we just created
-	if deleted < 1 {
-		t.Logf("Deleted %d snapshots (may vary based on test order)", deleted)
+	if deleted < 3 {
+		t.Errorf("Expected to delete at least 3 snapshots, deleted %d", deleted)
 	}
 
-	// Cleanup with long retention should delete nothing new
-	deleted, err = store.CleanupOldSnapshots(ctx, testClusterID, 24*time.Hour)
+	// Verify snapshots are gone
+	snapshots, err = store.ListSnapshots(ctx, clusterID, 10)
+	if err != nil {
+		t.Fatalf("Failed to list snapshots after cleanup: %v", err)
+	}
+	if len(snapshots) != 0 {
+		t.Errorf("Expected 0 snapshots after cleanup, got %d", len(snapshots))
+	}
+
+	// Create new snapshots and test retention-based cleanup
+	for range 2 {
+		err = store.SaveSnapshot(ctx, clusterID, settings, "v1.0.0")
+		if err != nil {
+			t.Fatalf("Failed to save snapshot: %v", err)
+		}
+	}
+
+	// Cleanup with long retention should delete nothing
+	deleted, err = store.CleanupOldSnapshots(ctx, clusterID, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Failed to cleanup snapshots: %v", err)
 	}
-	t.Logf("Deleted %d snapshots with 24h retention", deleted)
+	if deleted != 0 {
+		t.Errorf("Expected 0 deletions with 24h retention on fresh snapshots, got %d", deleted)
+	}
 }
 
 func TestCleanupOldChanges(t *testing.T) {
@@ -965,10 +1040,10 @@ func TestListSnapshots(t *testing.T) {
 
 	// Create multiple snapshots
 	settings := []Setting{{Variable: "snapshot.test", Value: "v1", SettingType: "s", Description: "Test"}}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		err := store.SaveSnapshot(ctx, clusterID, settings, "v1.0")
 		if err != nil {
-			t.Fatalf("Failed to save snapshot %d: %v", i, err)
+			t.Fatalf("Failed to save snapshot: %v", err)
 		}
 		time.Sleep(10 * time.Millisecond) // Ensure different timestamps
 	}
@@ -1065,5 +1140,200 @@ func TestGetSnapshotByID(t *testing.T) {
 	}
 	if notFound != nil {
 		t.Errorf("Expected nil for non-existent snapshot, got %v", notFound)
+	}
+}
+
+func TestGetAllChanges(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Create changes for multiple clusters to verify GetAllChanges returns all
+	cluster1 := "all-changes-cluster1-" + time.Now().Format("20060102150405.000")
+	cluster2 := "all-changes-cluster2-" + time.Now().Format("20060102150405.000")
+
+	// Create changes in cluster1
+	settings1a := []Setting{{Variable: "all.test.setting", Value: "v1", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, cluster1, settings1a, "v1.0")
+	settings1b := []Setting{{Variable: "all.test.setting", Value: "v2", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, cluster1, settings1b, "v1.0")
+
+	// Create changes in cluster2
+	settings2a := []Setting{{Variable: "all.test.setting", Value: "a1", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, cluster2, settings2a, "v1.0")
+	settings2b := []Setting{{Variable: "all.test.setting", Value: "a2", SettingType: "s", Description: "Test"}}
+	store.SaveSnapshot(ctx, cluster2, settings2b, "v1.0")
+
+	// Get all changes
+	changes, err := store.GetAllChanges(ctx, 100)
+	if err != nil {
+		t.Fatalf("GetAllChanges failed: %v", err)
+	}
+
+	// Should have at least 2 changes (one from each cluster)
+	if len(changes) < 2 {
+		t.Errorf("Expected at least 2 changes, got %d", len(changes))
+	}
+
+	// Verify changes include both clusters
+	cluster1Found := false
+	cluster2Found := false
+	for _, c := range changes {
+		if c.ClusterID == cluster1 {
+			cluster1Found = true
+		}
+		if c.ClusterID == cluster2 {
+			cluster2Found = true
+		}
+	}
+	if !cluster1Found {
+		t.Errorf("Expected changes from %s", cluster1)
+	}
+	if !cluster2Found {
+		t.Errorf("Expected changes from %s", cluster2)
+	}
+
+	// Test limit
+	limited, err := store.GetAllChanges(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetAllChanges with limit failed: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Errorf("Expected exactly 1 change with limit=1, got %d", len(limited))
+	}
+}
+
+func TestWriteChangesCSV(t *testing.T) {
+	now := time.Now()
+	changes := []Change{
+		{
+			DetectedAt:  now,
+			Variable:    "test.setting.one",
+			OldValue:    "old1",
+			NewValue:    "new1",
+			Description: "First setting",
+			Version:     "v24.1.0",
+		},
+		{
+			DetectedAt:  now.Add(-time.Hour),
+			Variable:    "test.setting.two",
+			OldValue:    "",
+			NewValue:    "added",
+			Description: "New setting",
+			Version:     "v24.1.0",
+		},
+	}
+
+	var buf bytes.Buffer
+	err := WriteChangesCSV(&buf, "test-cluster", changes)
+	if err != nil {
+		t.Fatalf("WriteChangesCSV failed: %v", err)
+	}
+
+	// Parse the CSV
+	reader := csv.NewReader(&buf)
+	records, err := reader.ReadAll()
+	if err != nil {
+		t.Fatalf("Failed to parse CSV output: %v", err)
+	}
+
+	// Verify header
+	if len(records) < 1 {
+		t.Fatal("Expected at least header row")
+	}
+	expectedHeaders := []string{"cluster_id", "detected_at", "variable", "version", "old_value", "new_value", "description"}
+	for i, h := range expectedHeaders {
+		if records[0][i] != h {
+			t.Errorf("Header[%d] = %q, expected %q", i, records[0][i], h)
+		}
+	}
+
+	// Verify data rows
+	if len(records) != 3 { // header + 2 data rows
+		t.Errorf("Expected 3 rows (header + 2 data), got %d", len(records))
+	}
+
+	// Verify first data row
+	if records[1][0] != "test-cluster" {
+		t.Errorf("ClusterID = %q, expected 'test-cluster'", records[1][0])
+	}
+	if records[1][2] != "test.setting.one" {
+		t.Errorf("Variable = %q, expected 'test.setting.one'", records[1][2])
+	}
+	if records[1][4] != "old1" {
+		t.Errorf("OldValue = %q, expected 'old1'", records[1][4])
+	}
+	if records[1][5] != "new1" {
+		t.Errorf("NewValue = %q, expected 'new1'", records[1][5])
+	}
+}
+
+func TestWriteChangesCSVEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	err := WriteChangesCSV(&buf, "test-cluster", []Change{})
+	if err != nil {
+		t.Fatalf("WriteChangesCSV with empty changes failed: %v", err)
+	}
+
+	// Should still have header
+	reader := csv.NewReader(&buf)
+	records, err := reader.ReadAll()
+	if err != nil {
+		t.Fatalf("Failed to parse CSV output: %v", err)
+	}
+
+	if len(records) != 1 {
+		t.Errorf("Expected 1 row (header only), got %d", len(records))
+	}
+}
+
+func TestGetLatestSettings(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	clusterID := "latest-settings-test-" + time.Now().Format("20060102150405.000")
+
+	// Save a snapshot
+	settings := []Setting{
+		{Variable: "latest.test.a", Value: "valueA", SettingType: "s", Description: "Test A"},
+		{Variable: "latest.test.b", Value: "valueB", SettingType: "i", Description: "Test B"},
+	}
+	err = store.SaveSnapshot(ctx, clusterID, settings, "v1.0")
+	if err != nil {
+		t.Fatalf("Failed to save snapshot: %v", err)
+	}
+
+	// GetLatestSettings should return the same as GetLatestSnapshot
+	latestSettings, err := store.GetLatestSettings(ctx, clusterID)
+	if err != nil {
+		t.Fatalf("GetLatestSettings failed: %v", err)
+	}
+
+	if len(latestSettings) != 2 {
+		t.Errorf("Expected 2 settings, got %d", len(latestSettings))
+	}
+
+	if s, ok := latestSettings["latest.test.a"]; !ok || s.Value != "valueA" {
+		t.Errorf("Expected latest.test.a=valueA, got %v", latestSettings["latest.test.a"])
+	}
+
+	// Test non-existent cluster
+	empty, err := store.GetLatestSettings(ctx, "non-existent-cluster-12345")
+	if err != nil {
+		t.Fatalf("GetLatestSettings for non-existent cluster failed: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("Expected 0 settings for non-existent cluster, got %d", len(empty))
 	}
 }

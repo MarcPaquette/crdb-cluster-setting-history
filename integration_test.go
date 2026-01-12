@@ -49,41 +49,44 @@ func TestFullIntegration(t *testing.T) {
 	}
 	defer store.Close()
 
-	// Step 3: Run collector once
+	// Step 3: Run collector once (directly, without timing dependency)
 	t.Log("Step 3: Running collector...")
-	coll, err := collector.New(ctx, testClusterID, adminURL, store, time.Hour) // Interval doesn't matter, we call collect directly
+	coll, err := collector.New(ctx, testClusterID, adminURL, store, time.Hour)
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}
 	defer coll.Close()
 
-	// We need to trigger a collection - let's start and immediately cancel
-	collCtx, collCancel := context.WithTimeout(ctx, 5*time.Second)
-	go coll.Start(collCtx)
-	time.Sleep(2 * time.Second) // Wait for first collection
-	collCancel()
+	// Call Collect directly instead of relying on Start with sleep
+	if err := coll.Collect(ctx); err != nil {
+		t.Fatalf("First collection failed: %v", err)
+	}
 
 	// Step 4: Verify data was stored
 	t.Log("Step 4: Verifying stored data...")
-	changes, err := store.GetChanges(ctx, testClusterID, 10)
-	if err != nil {
-		t.Fatalf("Failed to get changes: %v", err)
-	}
-
-	// First run won't have changes (nothing to compare to)
-	t.Logf("Found %d changes after first collection (expected 0)", len(changes))
 
 	// Verify we can get the latest snapshot
 	snapshot, err := store.GetLatestSnapshot(ctx, testClusterID)
 	if err != nil {
 		t.Fatalf("Failed to get latest snapshot: %v", err)
 	}
-
 	if len(snapshot) == 0 {
-		t.Fatal("Expected snapshot to have settings")
+		t.Fatal("Expected snapshot to have settings after collection")
+	}
+	t.Logf("First snapshot contains %d settings", len(snapshot))
+
+	// Step 5: Run a second collection to generate changes
+	t.Log("Step 5: Running second collection to verify change detection...")
+	if err := coll.Collect(ctx); err != nil {
+		t.Fatalf("Second collection failed: %v", err)
 	}
 
-	t.Logf("Snapshot contains %d settings", len(snapshot))
+	// Get changes - there may or may not be changes depending on cluster state
+	changes, err := store.GetChanges(ctx, testClusterID, 10)
+	if err != nil {
+		t.Fatalf("Failed to get changes: %v", err)
+	}
+	t.Logf("Found %d changes after two collections", len(changes))
 
 	// Sample some settings
 	count := 0

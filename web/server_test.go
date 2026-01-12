@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"crdb-cluster-history/config"
 	"crdb-cluster-history/storage"
 )
 
@@ -1044,5 +1046,299 @@ func TestHandleIndexWithClusterParam(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "cluster.param.test") {
 		t.Error("Expected test setting in response")
+	}
+}
+
+func TestHandleAPISnapshots(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	clusterID := "api-snapshots-test-" + time.Now().Format("20060102150405.000")
+
+	// Create some test snapshots
+	settings := []storage.Setting{
+		{Variable: "api.snapshot.test", Value: "v1", SettingType: "s", Description: "Test"},
+	}
+	for range 3 {
+		err = store.SaveSnapshot(ctx, clusterID, settings, "v1.0")
+		if err != nil {
+			t.Fatalf("Failed to save snapshot: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	server, err := New(store, WithDefaultClusterID(clusterID))
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	// Test without cluster param (uses default)
+	req := httptest.NewRequest(http.MethodGet, "/api/snapshots", nil)
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	contentType := w.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Expected application/json, got %s", contentType)
+	}
+
+	var snapshots []storage.SnapshotInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &snapshots); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+	if len(snapshots) < 3 {
+		t.Errorf("Expected at least 3 snapshots, got %d", len(snapshots))
+	}
+
+	// Test with explicit cluster param
+	req = httptest.NewRequest(http.MethodGet, "/api/snapshots?cluster="+clusterID, nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	// Test with limit
+	req = httptest.NewRequest(http.MethodGet, "/api/snapshots?cluster="+clusterID+"&limit=2", nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	var limited []storage.SnapshotInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &limited); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Errorf("Expected 2 snapshots with limit=2, got %d", len(limited))
+	}
+
+	// Test method not allowed
+	req = httptest.NewRequest(http.MethodPost, "/api/snapshots", nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405, got %d", w.Code)
+	}
+}
+
+func TestHandleAPICompareSnapshots(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	clusterID := "compare-snapshots-test-" + time.Now().Format("20060102150405.000")
+
+	// Create first snapshot
+	settings1 := []storage.Setting{
+		{Variable: "compare.shared", Value: "same", SettingType: "s", Description: "Shared"},
+		{Variable: "compare.different", Value: "val1", SettingType: "s", Description: "Different"},
+		{Variable: "compare.only1", Value: "only-in-1", SettingType: "s", Description: "Only in 1"},
+	}
+	store.SaveSnapshot(ctx, clusterID, settings1, "v1.0")
+
+	// Create second snapshot
+	settings2 := []storage.Setting{
+		{Variable: "compare.shared", Value: "same", SettingType: "s", Description: "Shared"},
+		{Variable: "compare.different", Value: "val2", SettingType: "s", Description: "Different"},
+		{Variable: "compare.only2", Value: "only-in-2", SettingType: "s", Description: "Only in 2"},
+	}
+	time.Sleep(10 * time.Millisecond)
+	store.SaveSnapshot(ctx, clusterID, settings2, "v1.0")
+
+	// Get snapshot IDs
+	snapshots, err := store.ListSnapshots(ctx, clusterID, 2)
+	if err != nil || len(snapshots) < 2 {
+		t.Fatalf("Failed to get snapshot IDs: %v", err)
+	}
+	snapshot1ID := snapshots[1].ID // older
+	snapshot2ID := snapshots[0].ID // newer
+
+	server, err := New(store)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	// Test valid comparison
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/compare-snapshots?snapshot1=%d&snapshot2=%d", snapshot1ID, snapshot2ID), nil)
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var result TimeCompareResult
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	// Should have one different, one before-only, one after-only
+	if len(result.Different) != 1 {
+		t.Errorf("Expected 1 different, got %d", len(result.Different))
+	}
+	if len(result.BeforeOnly) != 1 {
+		t.Errorf("Expected 1 before-only, got %d", len(result.BeforeOnly))
+	}
+	if len(result.AfterOnly) != 1 {
+		t.Errorf("Expected 1 after-only, got %d", len(result.AfterOnly))
+	}
+
+	// Test missing params
+	req = httptest.NewRequest(http.MethodGet, "/api/compare-snapshots", nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for missing params, got %d", w.Code)
+	}
+
+	// Test same snapshot
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/compare-snapshots?snapshot1=%d&snapshot2=%d", snapshot1ID, snapshot1ID), nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for same snapshot, got %d", w.Code)
+	}
+
+	// Test invalid IDs
+	req = httptest.NewRequest(http.MethodGet, "/api/compare-snapshots?snapshot1=abc&snapshot2=123", nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for invalid ID, got %d", w.Code)
+	}
+
+	// Test non-existent snapshot
+	req = httptest.NewRequest(http.MethodGet, "/api/compare-snapshots?snapshot1=999999999&snapshot2=999999998", nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected 404 for non-existent snapshot, got %d", w.Code)
+	}
+
+	// Test method not allowed
+	req = httptest.NewRequest(http.MethodPost, "/api/compare-snapshots?snapshot1=1&snapshot2=2", nil)
+	w = httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405, got %d", w.Code)
+	}
+}
+
+func TestHandleHistory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	clusters := []config.ClusterConfig{
+		{ID: "prod", Name: "Production", DatabaseURL: "postgresql://prod"},
+		{ID: "staging", Name: "Staging", DatabaseURL: "postgresql://staging"},
+	}
+
+	server, err := New(store, WithClusters(clusters), WithDefaultClusterID("prod"))
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/history", nil)
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	contentType := w.Header().Get("Content-Type")
+	if !strings.Contains(contentType, "text/html") {
+		t.Errorf("Expected text/html, got %s", contentType)
+	}
+}
+
+func TestWithRedactor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	redactor := storage.NewRedactor(storage.RedactorConfig{
+		Enabled: true,
+	})
+
+	server, err := New(store, WithRedactor(redactor))
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	// Just verify the server was created with the redactor
+	// The redactor functionality is tested in storage/redact_test.go
+	if server == nil {
+		t.Fatal("Expected non-nil server")
+	}
+}
+
+func TestWithClusters(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := storage.New(ctx, getTestDB(t))
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	clusters := []config.ClusterConfig{
+		{ID: "prod", Name: "Production", DatabaseURL: "postgresql://prod"},
+		{ID: "staging", Name: "Staging", DatabaseURL: "postgresql://staging"},
+	}
+
+	server, err := New(store, WithClusters(clusters))
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+
+	// Verify clusters are returned by API
+	req := httptest.NewRequest(http.MethodGet, "/api/clusters", nil)
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	var result []map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Errorf("Expected 2 clusters, got %d", len(result))
 	}
 }
