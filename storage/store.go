@@ -57,6 +57,43 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// derefString returns the dereferenced value, or empty string if nil.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// changeNullableFields holds nullable columns from the changes table for scanning.
+type changeNullableFields struct {
+	OldValue, NewValue, Description, Version *string
+}
+
+// applyTo copies the non-nil values to the target Change.
+func (f *changeNullableFields) applyTo(c *Change) {
+	c.OldValue = derefString(f.OldValue)
+	c.NewValue = derefString(f.NewValue)
+	c.Description = derefString(f.Description)
+	c.Version = derefString(f.Version)
+}
+
+// annotationNullableFields holds nullable update columns from the annotations table.
+type annotationNullableFields struct {
+	UpdatedBy *string
+	UpdatedAt *time.Time
+}
+
+// applyTo copies the non-nil values to the target Annotation.
+func (f *annotationNullableFields) applyTo(a *Annotation) {
+	if f.UpdatedBy != nil {
+		a.UpdatedBy = *f.UpdatedBy
+	}
+	if f.UpdatedAt != nil {
+		a.UpdatedAt = *f.UpdatedAt
+	}
+}
+
 // querier is an interface that both pgxpool.Pool and pgx.Tx implement.
 type querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
@@ -490,22 +527,11 @@ func (s *Store) GetChanges(ctx context.Context, clusterID string, limit int) ([]
 	var changes []Change
 	for rows.Next() {
 		var c Change
-		var oldValue, newValue, description, version *string
-		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &oldValue, &newValue, &description, &version); err != nil {
+		var nf changeNullableFields
+		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &nf.OldValue, &nf.NewValue, &nf.Description, &nf.Version); err != nil {
 			return nil, err
 		}
-		if oldValue != nil {
-			c.OldValue = *oldValue
-		}
-		if newValue != nil {
-			c.NewValue = *newValue
-		}
-		if description != nil {
-			c.Description = *description
-		}
-		if version != nil {
-			c.Version = *version
-		}
+		nf.applyTo(&c)
 		changes = append(changes, c)
 	}
 
@@ -526,22 +552,11 @@ func (s *Store) GetAllChanges(ctx context.Context, limit int) ([]Change, error) 
 	var changes []Change
 	for rows.Next() {
 		var c Change
-		var oldValue, newValue, description, version *string
-		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &oldValue, &newValue, &description, &version); err != nil {
+		var nf changeNullableFields
+		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &nf.OldValue, &nf.NewValue, &nf.Description, &nf.Version); err != nil {
 			return nil, err
 		}
-		if oldValue != nil {
-			c.OldValue = *oldValue
-		}
-		if newValue != nil {
-			c.NewValue = *newValue
-		}
-		if description != nil {
-			c.Description = *description
-		}
-		if version != nil {
-			c.Version = *version
-		}
+		nf.applyTo(&c)
 		changes = append(changes, c)
 	}
 
@@ -693,50 +708,38 @@ func (s *Store) CreateAnnotation(ctx context.Context, changeID int64, content, c
 // GetAnnotation retrieves an annotation by its ID.
 func (s *Store) GetAnnotation(ctx context.Context, id int64) (*Annotation, error) {
 	var a Annotation
-	var updatedBy *string
-	var updatedAt *time.Time
+	var nf annotationNullableFields
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, change_id, content, created_by, created_at, updated_by, updated_at
 		 FROM annotations WHERE id = $1`,
 		id,
-	).Scan(&a.ID, &a.ChangeID, &a.Content, &a.CreatedBy, &a.CreatedAt, &updatedBy, &updatedAt)
+	).Scan(&a.ID, &a.ChangeID, &a.Content, &a.CreatedBy, &a.CreatedAt, &nf.UpdatedBy, &nf.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if updatedBy != nil {
-		a.UpdatedBy = *updatedBy
-	}
-	if updatedAt != nil {
-		a.UpdatedAt = *updatedAt
-	}
+	nf.applyTo(&a)
 	return &a, nil
 }
 
 // GetAnnotationByChangeID retrieves an annotation for a specific change.
 func (s *Store) GetAnnotationByChangeID(ctx context.Context, changeID int64) (*Annotation, error) {
 	var a Annotation
-	var updatedBy *string
-	var updatedAt *time.Time
+	var nf annotationNullableFields
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, change_id, content, created_by, created_at, updated_by, updated_at
 		 FROM annotations WHERE change_id = $1`,
 		changeID,
-	).Scan(&a.ID, &a.ChangeID, &a.Content, &a.CreatedBy, &a.CreatedAt, &updatedBy, &updatedAt)
+	).Scan(&a.ID, &a.ChangeID, &a.Content, &a.CreatedBy, &a.CreatedAt, &nf.UpdatedBy, &nf.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if updatedBy != nil {
-		a.UpdatedBy = *updatedBy
-	}
-	if updatedAt != nil {
-		a.UpdatedAt = *updatedAt
-	}
+	nf.applyTo(&a)
 	return &a, nil
 }
 
@@ -791,31 +794,21 @@ func (s *Store) GetChangesWithAnnotations(ctx context.Context, clusterID string,
 	var results []ChangeWithAnnotation
 	for rows.Next() {
 		var cwa ChangeWithAnnotation
-		var oldValue, newValue, description, version *string
+		var cnf changeNullableFields
 		var annID *int64
-		var annContent, annCreatedBy, annUpdatedBy *string
-		var annCreatedAt, annUpdatedAt *time.Time
+		var annContent, annCreatedBy *string
+		var annCreatedAt *time.Time
+		var anf annotationNullableFields
 
 		err := rows.Scan(
-			&cwa.ID, &cwa.ClusterID, &cwa.DetectedAt, &cwa.Variable, &oldValue, &newValue, &description, &version,
-			&annID, &annContent, &annCreatedBy, &annCreatedAt, &annUpdatedBy, &annUpdatedAt,
+			&cwa.ID, &cwa.ClusterID, &cwa.DetectedAt, &cwa.Variable, &cnf.OldValue, &cnf.NewValue, &cnf.Description, &cnf.Version,
+			&annID, &annContent, &annCreatedBy, &annCreatedAt, &anf.UpdatedBy, &anf.UpdatedAt,
 		)
 		if err != nil {
 			return nil, err
 		}
 
-		if oldValue != nil {
-			cwa.OldValue = *oldValue
-		}
-		if newValue != nil {
-			cwa.NewValue = *newValue
-		}
-		if description != nil {
-			cwa.Description = *description
-		}
-		if version != nil {
-			cwa.Version = *version
-		}
+		cnf.applyTo(&cwa.Change)
 
 		// Only populate annotation if it exists
 		if annID != nil {
@@ -826,12 +819,7 @@ func (s *Store) GetChangesWithAnnotations(ctx context.Context, clusterID string,
 				CreatedBy: *annCreatedBy,
 				CreatedAt: *annCreatedAt,
 			}
-			if annUpdatedBy != nil {
-				cwa.Annotation.UpdatedBy = *annUpdatedBy
-			}
-			if annUpdatedAt != nil {
-				cwa.Annotation.UpdatedAt = *annUpdatedAt
-			}
+			anf.applyTo(cwa.Annotation)
 		}
 
 		results = append(results, cwa)
