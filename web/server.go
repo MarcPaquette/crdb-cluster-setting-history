@@ -83,12 +83,12 @@ func New(store *storage.Store, opts ...Option) (*Server, error) {
 	funcMap := template.FuncMap{
 		"js": func(s string) template.JS {
 			// Escape string for safe embedding in JavaScript string literals
-			b, _ := json.Marshal(s)
+			encoded, _ := json.Marshal(s)
 			// Remove surrounding quotes since template uses '{{js .Content}}'
-			if len(b) >= 2 {
-				return template.JS(b[1 : len(b)-1])
+			if len(encoded) < 2 {
+				return template.JS("")
 			}
-			return template.JS("")
+			return template.JS(encoded[1 : len(encoded)-1])
 		},
 	}
 	tmpl, err := template.New("").Funcs(funcMap).ParseFS(templateFS, "templates/*.html")

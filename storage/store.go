@@ -59,10 +59,10 @@ type Store struct {
 
 // derefString returns the dereferenced value, or empty string if nil.
 func derefString(s *string) string {
-	if s == nil {
-		return ""
+	if s != nil {
+		return *s
 	}
-	return *s
+	return ""
 }
 
 // changeNullableFields holds nullable columns from the changes table for scanning.
@@ -86,9 +86,7 @@ type annotationNullableFields struct {
 
 // applyTo copies the non-nil values to the target Annotation.
 func (f *annotationNullableFields) applyTo(a *Annotation) {
-	if f.UpdatedBy != nil {
-		a.UpdatedBy = *f.UpdatedBy
-	}
+	a.UpdatedBy = derefString(f.UpdatedBy)
 	if f.UpdatedAt != nil {
 		a.UpdatedAt = *f.UpdatedAt
 	}
@@ -184,41 +182,13 @@ func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 
 	// Add description column to changes table if it doesn't exist
-	var hasDescriptionColumn bool
-	err = pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_name = 'changes' AND column_name = 'description'
-		)
-	`).Scan(&hasDescriptionColumn)
-	if err != nil {
+	if err := addColumnIfNotExists(ctx, pool, "changes", "description", "TEXT"); err != nil {
 		return err
-	}
-
-	if !hasDescriptionColumn {
-		_, err = pool.Exec(ctx, "ALTER TABLE changes ADD COLUMN description TEXT")
-		if err != nil {
-			return err
-		}
 	}
 
 	// Add version column to changes table if it doesn't exist
-	var hasVersionColumn bool
-	err = pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM information_schema.columns
-			WHERE table_name = 'changes' AND column_name = 'version'
-		)
-	`).Scan(&hasVersionColumn)
-	if err != nil {
+	if err := addColumnIfNotExists(ctx, pool, "changes", "version", "TEXT"); err != nil {
 		return err
-	}
-
-	if !hasVersionColumn {
-		_, err = pool.Exec(ctx, "ALTER TABLE changes ADD COLUMN version TEXT")
-		if err != nil {
-			return err
-		}
 	}
 
 	// Add annotations table if it doesn't exist
@@ -328,6 +298,14 @@ func migrateMetadataForMultiCluster(ctx context.Context, pool *pgxpool.Pool) err
 	}
 
 	return nil
+}
+
+// addColumnIfNotExists adds a column to a table if it doesn't already exist.
+// Uses ADD COLUMN IF NOT EXISTS for idempotency (handles concurrent migrations).
+func addColumnIfNotExists(ctx context.Context, pool *pgxpool.Pool, table, column, columnType string) error {
+	_, err := pool.Exec(ctx, "ALTER TABLE "+pgx.Identifier{table}.Sanitize()+
+		" ADD COLUMN IF NOT EXISTS "+pgx.Identifier{column}.Sanitize()+" "+columnType)
+	return err
 }
 
 // isConstraintAlreadyExists checks if the error indicates a constraint already exists

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,24 +26,31 @@ var Version = "dev"
 
 func main() {
 	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "init":
+		command := os.Args[1]
+
+		if command == "init" {
 			runInit()
 			return
-		case "export":
+		}
+
+		if command == "export" {
 			runExport()
 			return
-		case "-h", "--help", "help":
+		}
+
+		if command == "-h" || command == "--help" || command == "help" {
 			usage()
 			return
-		case "-v", "--version", "version":
+		}
+
+		if command == "-v" || command == "--version" || command == "version" {
 			fmt.Printf("crdb-cluster-history %s\n", Version)
 			return
-		default:
-			fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", os.Args[1])
-			usage()
-			os.Exit(1)
 		}
+
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
+		usage()
+		os.Exit(1)
 	}
 
 	runServer()
@@ -62,23 +70,38 @@ func runExport() {
 
 	for i := 2; i < len(os.Args); i++ {
 		arg := os.Args[i]
-		switch {
-		case arg == "--all" || arg == "-a":
+
+		if arg == "--all" || arg == "-a" {
 			exportAll = true
-		case (arg == "--cluster" || arg == "-c") && i+1 < len(os.Args):
-			i++
-			clusterID = os.Args[i]
-		case len(arg) > 2 && arg[:2] == "-c":
-			clusterID = arg[2:]
-		case len(arg) > 10 && arg[:10] == "--cluster=":
-			clusterID = arg[10:]
-		case len(arg) > 0 && arg[0] != '-':
-			outputPath = arg
-		default:
-			fmt.Fprintf(os.Stderr, "Unknown export flag: %s\n", arg)
-			fmt.Fprintln(os.Stderr, "Usage: crdb-cluster-history export [--all|-a] [--cluster|-c ID] [output-path]")
-			os.Exit(1)
+			continue
 		}
+
+		if arg == "--cluster" || arg == "-c" {
+			if i+1 < len(os.Args) {
+				i++
+				clusterID = os.Args[i]
+			}
+			continue
+		}
+
+		if strings.HasPrefix(arg, "-c") && len(arg) > 2 {
+			clusterID = strings.TrimPrefix(arg, "-c")
+			continue
+		}
+
+		if strings.HasPrefix(arg, "--cluster=") {
+			clusterID = strings.TrimPrefix(arg, "--cluster=")
+			continue
+		}
+
+		if !strings.HasPrefix(arg, "-") {
+			outputPath = arg
+			continue
+		}
+
+		fmt.Fprintf(os.Stderr, "Unknown export flag: %s\n", arg)
+		fmt.Fprintln(os.Stderr, "Usage: crdb-cluster-history export [--all|-a] [--cluster|-c ID] [output-path]")
+		os.Exit(1)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
