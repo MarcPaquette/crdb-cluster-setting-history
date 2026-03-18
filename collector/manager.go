@@ -7,18 +7,17 @@ import (
 	"sync"
 
 	"crdb-cluster-history/config"
-	"crdb-cluster-history/storage"
 )
 
 // Manager manages multiple collectors for different clusters.
 type Manager struct {
 	collectors map[string]*Collector
-	store      *storage.Store
+	store      Store
 	mu         sync.RWMutex
 }
 
 // NewManager creates a new collector manager for multi-cluster monitoring.
-func NewManager(ctx context.Context, cfg *config.Config, store *storage.Store) (*Manager, error) {
+func NewManager(ctx context.Context, cfg *config.Config, store Store) (*Manager, error) {
 	m := &Manager{
 		collectors: make(map[string]*Collector),
 		store:      store,

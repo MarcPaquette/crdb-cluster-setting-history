@@ -7,6 +7,7 @@ import (
 )
 
 func TestMiddleware_AuthDisabled(t *testing.T) {
+	t.Parallel()
 	cfg := Config{
 		Enabled: false,
 	}
@@ -27,6 +28,7 @@ func TestMiddleware_AuthDisabled(t *testing.T) {
 }
 
 func TestMiddleware_PublicPath(t *testing.T) {
+	t.Parallel()
 	cfg := Config{
 		Enabled:     true,
 		PublicPaths: []string{"/health"},
@@ -48,6 +50,7 @@ func TestMiddleware_PublicPath(t *testing.T) {
 }
 
 func TestMiddleware_NoCredentials(t *testing.T) {
+	t.Parallel()
 	passwordHash, _ := HashPassword("secret")
 	cfg := Config{
 		Enabled:      true,
@@ -74,6 +77,7 @@ func TestMiddleware_NoCredentials(t *testing.T) {
 }
 
 func TestMiddleware_ValidBasicAuth(t *testing.T) {
+	t.Parallel()
 	passwordHash, _ := HashPassword("secret")
 	cfg := Config{
 		Enabled:      true,
@@ -98,6 +102,7 @@ func TestMiddleware_ValidBasicAuth(t *testing.T) {
 }
 
 func TestMiddleware_InvalidPassword(t *testing.T) {
+	t.Parallel()
 	passwordHash, _ := HashPassword("secret")
 	cfg := Config{
 		Enabled:      true,
@@ -121,6 +126,7 @@ func TestMiddleware_InvalidPassword(t *testing.T) {
 }
 
 func TestMiddleware_InvalidUsername(t *testing.T) {
+	t.Parallel()
 	passwordHash, _ := HashPassword("secret")
 	cfg := Config{
 		Enabled:      true,
@@ -144,6 +150,7 @@ func TestMiddleware_InvalidUsername(t *testing.T) {
 }
 
 func TestMiddleware_ValidAPIKey(t *testing.T) {
+	t.Parallel()
 	cfg := Config{
 		Enabled: true,
 		APIKeys: []string{"test-api-key-123"},
@@ -166,6 +173,7 @@ func TestMiddleware_ValidAPIKey(t *testing.T) {
 }
 
 func TestMiddleware_InvalidAPIKey(t *testing.T) {
+	t.Parallel()
 	cfg := Config{
 		Enabled: true,
 		APIKeys: []string{"test-api-key-123"},
@@ -187,6 +195,7 @@ func TestMiddleware_InvalidAPIKey(t *testing.T) {
 }
 
 func TestParseAPIKeys(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input    string
 		expected []string
@@ -213,6 +222,7 @@ func TestParseAPIKeys(t *testing.T) {
 }
 
 func TestParsePublicPaths(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input    string
 		expected []string
@@ -237,6 +247,7 @@ func TestParsePublicPaths(t *testing.T) {
 }
 
 func TestHashPassword(t *testing.T) {
+	t.Parallel()
 	hash, err := HashPassword("testpassword")
 	if err != nil {
 		t.Fatalf("HashPassword failed: %v", err)

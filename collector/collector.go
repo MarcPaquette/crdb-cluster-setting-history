@@ -14,15 +14,24 @@ import (
 // versionRegex extracts the version number (e.g., "v25.4.2") from the full version string
 var versionRegex = regexp.MustCompile(`v\d+\.\d+\.\d+`)
 
+// Store defines the storage operations needed by the collector.
+type Store interface {
+	SaveSnapshot(ctx context.Context, clusterID string, settings []storage.Setting, version string) error
+	CleanupOldSnapshots(ctx context.Context, clusterID string, retention time.Duration) (int64, error)
+	CleanupOldChanges(ctx context.Context, clusterID string, retention time.Duration) (int64, error)
+	SetSourceClusterID(ctx context.Context, clusterID, sourceClusterID string) error
+	SetDatabaseVersion(ctx context.Context, clusterID, version string) error
+}
+
 type Collector struct {
 	pool      *pgxpool.Pool
-	store     *storage.Store
+	store     Store
 	clusterID string        // Config cluster ID (e.g., "prod", "staging")
 	interval  time.Duration
 	retention time.Duration
 }
 
-func New(ctx context.Context, clusterID, connString string, store *storage.Store, interval time.Duration) (*Collector, error) {
+func New(ctx context.Context, clusterID, connString string, store Store, interval time.Duration) (*Collector, error) {
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
 		return nil, err

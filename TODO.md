@@ -23,25 +23,25 @@ Each item is scoped to be tackled in a single session.
 
 ## Phase 2: Testability Foundation
 
-- [ ] **Define consumer-side interfaces for Store dependencies**
+- [x] **Define consumer-side interfaces for Store dependencies**
   - `storage/store.go`, `web/server.go`, `collector/collector.go` — `Store` is a concrete struct with 15+ public methods. `Collector` and web `Server` depend directly on `*storage.Store`. Zero interfaces exist, making unit testing without a real database impossible.
   - Fix: define narrow interfaces at each consumer site (e.g., `ChangeReader` in web, `SettingStore` in collector) containing only the methods that consumer needs.
 
-- [ ] **Add `t.Parallel()` to all pure unit tests**
+- [x] **Add `t.Parallel()` to all pure unit tests**
   - `auth/`, `config/`, `web/middleware_test.go` — 40+ independent unit tests run serially despite having no shared state.
   - Fix: add `t.Parallel()` to each test function (and subtests) that doesn't require database access.
 
-- [ ] **Add unit tests for untested helper functions**
+- [x] **Add unit tests for untested helper functions**
   - `main.go` — `getEnvBool`, `getEnvFloat`, `getEnvInt` (used for security config) are never tested.
   - `collector/collector.go` — `getShortVersion()` regex could silently fail.
   - `cmd/export.go` — the `--all` flag multi-cluster export path is never exercised.
   - Fix: add table-driven unit tests for each.
 
-- [ ] **Use unique test cluster IDs to enable parallel test packages**
+- [x] **Use unique test cluster IDs to enable parallel test packages**
   - `integration_test.go` and `collector/collector_test.go` both use `const testClusterID = "test-cluster"`, writing to the same test database. This is why `-p 1` is required.
   - Fix: use unique IDs per test (e.g., `t.Name() + "-" + uuid.NewString()[:8]`) or separate test databases per package.
 
-- [ ] **Add `-race` flag to test instructions**
+- [x] **Add `-race` flag to test instructions**
   - `CLAUDE.md` test commands don't include `-race`. Race conditions in the rate limiter's `sync.RWMutex`, the collector manager's map access, and concurrent database operations may go undetected.
   - Fix: add `-race` to all `go test` commands in CLAUDE.md.
 

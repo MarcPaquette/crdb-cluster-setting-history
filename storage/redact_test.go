@@ -7,6 +7,7 @@ import (
 )
 
 func TestRedactor_Disabled(t *testing.T) {
+	t.Parallel()
 	r := NewRedactor(RedactorConfig{Enabled: false})
 
 	if r.ShouldRedact("server.password") {
@@ -20,6 +21,7 @@ func TestRedactor_Disabled(t *testing.T) {
 }
 
 func TestRedactor_DefaultPatterns(t *testing.T) {
+	t.Parallel()
 	r := NewRedactor(RedactorConfig{Enabled: true})
 
 	tests := []struct {
@@ -50,6 +52,7 @@ func TestRedactor_DefaultPatterns(t *testing.T) {
 }
 
 func TestRedactor_CaseInsensitive(t *testing.T) {
+	t.Parallel()
 	r := NewRedactor(RedactorConfig{Enabled: true})
 
 	tests := []string{
@@ -66,6 +69,7 @@ func TestRedactor_CaseInsensitive(t *testing.T) {
 }
 
 func TestRedactor_AdditionalPatterns(t *testing.T) {
+	t.Parallel()
 	r := NewRedactor(RedactorConfig{
 		Enabled:            true,
 		AdditionalPatterns: "custom.sensitive, my.secret.setting",
@@ -90,6 +94,7 @@ func TestRedactor_AdditionalPatterns(t *testing.T) {
 }
 
 func TestRedactor_RedactValue(t *testing.T) {
+	t.Parallel()
 	r := NewRedactor(RedactorConfig{Enabled: true})
 
 	// Sensitive value
@@ -106,6 +111,7 @@ func TestRedactor_RedactValue(t *testing.T) {
 }
 
 func TestRedactor_RedactChange(t *testing.T) {
+	t.Parallel()
 	r := NewRedactor(RedactorConfig{Enabled: true})
 
 	now := time.Now()
@@ -148,6 +154,7 @@ func TestRedactor_RedactChange(t *testing.T) {
 }
 
 func TestRedactor_RedactChanges(t *testing.T) {
+	t.Parallel()
 	r := NewRedactor(RedactorConfig{Enabled: true})
 
 	now := time.Now()
@@ -185,6 +192,7 @@ func TestRedactor_RedactChanges(t *testing.T) {
 }
 
 func TestGlobToRegex(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		glob     string
 		input    string

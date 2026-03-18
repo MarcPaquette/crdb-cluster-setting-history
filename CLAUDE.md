@@ -15,15 +15,15 @@ go build -ldflags "-X main.Version=1.0.0" -o crdb-cluster-history .
 # Tests automatically create a dedicated test database (cluster_history_test)
 # Use -p 1 to avoid serialization conflicts between parallel tests
 DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable" \
-go test -p 1 -v ./...
+go test -p 1 -race -v ./...
 
 # Run tests with coverage
 DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable" \
-go test -p 1 -coverprofile=coverage.out ./...
+go test -p 1 -race -coverprofile=coverage.out ./...
 
 # Run a single test
 DATABASE_URL="postgresql://root@localhost:26257/defaultdb?sslmode=disable" \
-go test -v -run TestCollect ./collector/
+go test -race -v -run TestCollect ./collector/
 
 # View coverage report
 go tool cover -func=coverage.out

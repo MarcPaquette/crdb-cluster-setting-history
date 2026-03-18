@@ -26,6 +26,7 @@ func getHistoryURL(t *testing.T) string {
 }
 
 func TestWriteChangesCSV(t *testing.T) {
+	t.Parallel()
 	changes := []storage.Change{
 		{
 			DetectedAt:  time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
@@ -87,6 +88,7 @@ func TestWriteChangesCSV(t *testing.T) {
 }
 
 func TestWriteChangesCSVEmptyChanges(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	err := storage.WriteChangesCSV(&buf, "test-cluster", []storage.Change{})
 	if err != nil {
@@ -185,6 +187,7 @@ func TestRunExport(t *testing.T) {
 }
 
 func TestWriteChangesCSVWithVersion(t *testing.T) {
+	t.Parallel()
 	changes := []storage.Change{
 		{
 			DetectedAt:  time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -13,10 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// testClusterID is used for all tests
-const testClusterID = "test-cluster"
-
 func TestFullIntegration(t *testing.T) {
+	testClusterID := fmt.Sprintf("integ-%d", time.Now().UnixNano())
 	adminURL := os.Getenv("DATABASE_URL")
 	if adminURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")

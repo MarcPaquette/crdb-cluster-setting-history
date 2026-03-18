@@ -8,6 +8,7 @@ import (
 )
 
 func TestLoad(t *testing.T) {
+	t.Parallel()
 	// Create a temporary config file
 	content := `
 history_database_url: "postgresql://history@localhost:26257/history?sslmode=disable"
@@ -61,6 +62,7 @@ clusters:
 }
 
 func TestLoadDefaults(t *testing.T) {
+	t.Parallel()
 	// Config with minimal settings
 	content := `
 history_database_url: "postgresql://localhost/history"
@@ -146,6 +148,7 @@ func TestLoadFromEnvMissingVars(t *testing.T) {
 }
 
 func TestValidate(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		config  Config
@@ -276,6 +279,7 @@ func TestValidate(t *testing.T) {
 }
 
 func TestGetCluster(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Clusters: []ClusterConfig{
 			{Name: "Production", ID: "prod", DatabaseURL: "postgresql://prod"},
@@ -300,6 +304,7 @@ func TestGetCluster(t *testing.T) {
 }
 
 func TestClusterIDs(t *testing.T) {
+	t.Parallel()
 	cfg := &Config{
 		Clusters: []ClusterConfig{
 			{Name: "Production", ID: "prod", DatabaseURL: "postgresql://prod"},
@@ -320,6 +325,7 @@ func TestClusterIDs(t *testing.T) {
 }
 
 func TestIsValidID(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		id    string
 		valid bool
@@ -347,6 +353,7 @@ func TestIsValidID(t *testing.T) {
 }
 
 func TestDurationUnmarshal(t *testing.T) {
+	t.Parallel()
 	content := `
 poll_interval: 30s
 retention: 24h

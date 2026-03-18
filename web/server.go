@@ -2,8 +2,10 @@ package web
 
 import (
 	"archive/zip"
+	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
@@ -12,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"errors"
 
 	"crdb-cluster-history/config"
 	"crdb-cluster-history/storage"
@@ -47,9 +47,24 @@ type ErrorResponse struct {
 //go:embed templates/*
 var templateFS embed.FS
 
+// Store defines the storage operations needed by the web server.
+type Store interface {
+	GetChanges(ctx context.Context, clusterID string, limit int) ([]storage.Change, error)
+	GetChangesWithAnnotations(ctx context.Context, clusterID string, limit int) ([]storage.ChangeWithAnnotation, error)
+	GetSourceClusterID(ctx context.Context, clusterID string) (string, error)
+	GetDatabaseVersion(ctx context.Context, clusterID string) (string, error)
+	GetLatestSnapshot(ctx context.Context, clusterID string) (map[string]storage.Setting, error)
+	ListSnapshots(ctx context.Context, clusterID string, limit int) ([]storage.SnapshotInfo, error)
+	GetSnapshotByID(ctx context.Context, snapshotID int64) (map[string]storage.Setting, error)
+	CreateAnnotation(ctx context.Context, changeID int64, content, createdBy string) (*storage.Annotation, error)
+	GetAnnotation(ctx context.Context, id int64) (*storage.Annotation, error)
+	UpdateAnnotation(ctx context.Context, id int64, content, updatedBy string) error
+	DeleteAnnotation(ctx context.Context, id int64) error
+}
+
 // Server handles HTTP requests for the web UI.
 type Server struct {
-	store            *storage.Store
+	store            Store
 	tmpl             *template.Template
 	redactor         *storage.Redactor
 	defaultClusterID string                 // Default cluster ID for single-cluster mode
@@ -81,7 +96,7 @@ func WithClusters(clusters []config.ClusterConfig) Option {
 }
 
 // New creates a new web server.
-func New(store *storage.Store, opts ...Option) (*Server, error) {
+func New(store Store, opts ...Option) (*Server, error) {
 	// Register custom template functions
 	funcMap := template.FuncMap{
 		"js": func(s string) template.JS {

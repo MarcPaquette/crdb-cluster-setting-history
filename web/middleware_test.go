@@ -8,6 +8,7 @@ import (
 )
 
 func TestSecurityHeaders_Basic(t *testing.T) {
+	t.Parallel()
 	handler := SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -47,6 +48,7 @@ func TestSecurityHeaders_Basic(t *testing.T) {
 }
 
 func TestSecurityHeaders_WithTLS(t *testing.T) {
+	t.Parallel()
 	handler := SecurityHeaders(true)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -67,6 +69,7 @@ func TestSecurityHeaders_WithTLS(t *testing.T) {
 }
 
 func TestRateLimiter_Disabled(t *testing.T) {
+	t.Parallel()
 	rl := NewRateLimiter(RateLimiterConfig{
 		Enabled:           false,
 		RequestsPerSecond: 1,
@@ -92,6 +95,7 @@ func TestRateLimiter_Disabled(t *testing.T) {
 }
 
 func TestRateLimiter_Enabled(t *testing.T) {
+	t.Parallel()
 	rl := NewRateLimiter(RateLimiterConfig{
 		Enabled:           true,
 		RequestsPerSecond: 1,
@@ -133,6 +137,7 @@ func TestRateLimiter_Enabled(t *testing.T) {
 }
 
 func TestRateLimiter_PerIP(t *testing.T) {
+	t.Parallel()
 	rl := NewRateLimiter(RateLimiterConfig{
 		Enabled:           true,
 		RequestsPerSecond: 1,
@@ -175,6 +180,7 @@ func TestRateLimiter_PerIP(t *testing.T) {
 }
 
 func TestGetClientIP_RemoteAddr(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "192.168.1.100:12345"
 
@@ -185,6 +191,7 @@ func TestGetClientIP_RemoteAddr(t *testing.T) {
 }
 
 func TestGetClientIP_XForwardedFor(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "10.0.0.1:12345"
 	req.Header.Set("X-Forwarded-For", "203.0.113.50")
@@ -196,6 +203,7 @@ func TestGetClientIP_XForwardedFor(t *testing.T) {
 }
 
 func TestGetClientIP_XForwardedForChain(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "10.0.0.1:12345"
 	req.Header.Set("X-Forwarded-For", "203.0.113.50, 70.41.3.18, 150.172.238.178")
@@ -207,6 +215,7 @@ func TestGetClientIP_XForwardedForChain(t *testing.T) {
 }
 
 func TestGetClientIP_XRealIP(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "10.0.0.1:12345"
 	req.Header.Set("X-Real-IP", "203.0.113.75")
@@ -218,6 +227,7 @@ func TestGetClientIP_XRealIP(t *testing.T) {
 }
 
 func TestGetClientIP_XForwardedForPrecedence(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "10.0.0.1:12345"
 	req.Header.Set("X-Forwarded-For", "203.0.113.50")
@@ -231,6 +241,7 @@ func TestGetClientIP_XForwardedForPrecedence(t *testing.T) {
 }
 
 func TestGetClientIP_NoPort(t *testing.T) {
+	t.Parallel()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "192.168.1.100" // No port
 
@@ -241,6 +252,7 @@ func TestGetClientIP_NoPort(t *testing.T) {
 }
 
 func TestChainMiddleware_Empty(t *testing.T) {
+	t.Parallel()
 	called := false
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -263,6 +275,7 @@ func TestChainMiddleware_Empty(t *testing.T) {
 }
 
 func TestChainMiddleware_Single(t *testing.T) {
+	t.Parallel()
 	order := []string{}
 
 	middleware := func(next http.Handler) http.Handler {
@@ -293,6 +306,7 @@ func TestChainMiddleware_Single(t *testing.T) {
 }
 
 func TestChainMiddleware_Multiple(t *testing.T) {
+	t.Parallel()
 	order := []string{}
 
 	middleware1 := func(next http.Handler) http.Handler {
@@ -341,6 +355,7 @@ func TestChainMiddleware_Multiple(t *testing.T) {
 }
 
 func TestRateLimiter_Cleanup(t *testing.T) {
+	t.Parallel()
 	rl := NewRateLimiter(RateLimiterConfig{
 		Enabled:           true,
 		RequestsPerSecond: 10,
@@ -385,6 +400,7 @@ func TestRateLimiter_Cleanup(t *testing.T) {
 }
 
 func TestNewRateLimiter(t *testing.T) {
+	t.Parallel()
 	cfg := RateLimiterConfig{
 		Enabled:           true,
 		RequestsPerSecond: 10.5,
