@@ -205,6 +205,10 @@ func runServer() {
 		log.Printf("Rate limiting enabled (%.1f req/s, burst %d)", getEnvFloat("RATE_LIMIT_RPS", 10), getEnvInt("RATE_LIMIT_BURST", 20))
 	}
 
+	// Create context with cancellation (moved before rate limiter cleanup)
+	ctx, cancel := context.WithCancel(context.Background())
+	rateLimiter.StartCleanup(ctx)
+
 	// Redaction configuration
 	redactCfg := storage.RedactorConfig{
 		Enabled:            getEnvBool("REDACT_SENSITIVE", false),
@@ -215,8 +219,6 @@ func runServer() {
 		log.Printf("Sensitive data redaction enabled")
 	}
 
-	// Create context with cancellation
-	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Initialize storage (connects to history database)

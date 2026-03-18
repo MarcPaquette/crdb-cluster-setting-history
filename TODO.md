@@ -7,15 +7,15 @@ Each item is scoped to be tackled in a single session.
 
 ## Phase 1: Critical Security
 
-- [ ] **Add `http.MaxBytesReader` on JSON-decoding endpoints**
+- [x] **Add `http.MaxBytesReader` on JSON-decoding endpoints**
   - `web/server.go` — `json.NewDecoder(r.Body).Decode(&req)` reads the entire body with no size limit. An attacker can POST a multi-GB body to `/api/annotations` and exhaust memory.
   - Fix: wrap with `r.Body = http.MaxBytesReader(w, r.Body, 1<<20)` (1 MB limit) before decoding.
 
-- [ ] **Add rate limiter cleanup to prevent memory leak**
+- [x] **Add rate limiter cleanup to prevent memory leak**
   - `web/middleware.go` — the `visitors` map grows unboundedly; every unique IP creates an entry that is never cleaned up. An attacker can exhaust memory by sending requests from many IPs or spoofing `X-Forwarded-For`.
   - Fix: add a background goroutine that periodically evicts entries not seen in 5 minutes, or use a bounded LRU cache.
 
-- [ ] **Use pgx error codes instead of string matching**
+- [x] **Use pgx error codes instead of string matching**
   - `web/server.go` — `strings.Contains(errStr, "foreign key")` is fragile and locale-dependent. Database error messages can change between versions.
   - Fix: use `pgconn.PgError.Code` to check for specific PostgreSQL error conditions (23503 for FK violation, 23505 for unique violation).
 

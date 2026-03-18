@@ -13,10 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"errors"
+
 	"crdb-cluster-history/config"
 	"crdb-cluster-history/storage"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // AnnotationRequest is the JSON body for creating/updating annotations.
@@ -557,6 +560,7 @@ func (s *Server) handleAnnotations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AnnotationRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.jsonError(w, "Invalid JSON", http.StatusBadRequest)
 		return
@@ -576,14 +580,16 @@ func (s *Server) handleAnnotations(w http.ResponseWriter, r *http.Request) {
 	ann, err := s.store.CreateAnnotation(r.Context(), req.ChangeID, req.Content, username)
 	if err != nil {
 		log.Printf("Error creating annotation: %v", err)
-		errStr := err.Error()
-		if strings.Contains(errStr, "foreign key") || strings.Contains(errStr, "violates") {
-			s.jsonError(w, "Change not found", http.StatusNotFound)
-			return
-		}
-		if strings.Contains(errStr, "unique") || strings.Contains(errStr, "duplicate") {
-			s.jsonError(w, "Annotation already exists for this change", http.StatusConflict)
-			return
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			switch pgErr.Code {
+			case "23503": // foreign_key_violation
+				s.jsonError(w, "Change not found", http.StatusNotFound)
+				return
+			case "23505": // unique_violation
+				s.jsonError(w, "Annotation already exists for this change", http.StatusConflict)
+				return
+			}
 		}
 		s.jsonError(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -633,6 +639,7 @@ func (s *Server) getAnnotation(w http.ResponseWriter, r *http.Request, id int64)
 
 func (s *Server) updateAnnotation(w http.ResponseWriter, r *http.Request, id int64) {
 	var req AnnotationRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB limit
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.jsonError(w, "Invalid JSON", http.StatusBadRequest)
 		return

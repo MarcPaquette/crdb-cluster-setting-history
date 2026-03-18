@@ -1,10 +1,12 @@
 package web
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -64,7 +66,8 @@ type RateLimiter struct {
 }
 
 type visitorInfo struct {
-	limiter *rate.Limiter
+	limiter  *rate.Limiter
+	lastSeen time.Time
 }
 
 // NewRateLimiter creates a new rate limiter.
@@ -85,11 +88,41 @@ func (rl *RateLimiter) getLimiter(ip string) *rate.Limiter {
 	v, exists := rl.visitors[ip]
 	if !exists {
 		limiter := rate.NewLimiter(rl.rate, rl.burst)
-		rl.visitors[ip] = &visitorInfo{limiter: limiter}
+		rl.visitors[ip] = &visitorInfo{limiter: limiter, lastSeen: time.Now()}
 		return limiter
 	}
 
+	v.lastSeen = time.Now()
 	return v.limiter
+}
+
+// StartCleanup spawns a goroutine that periodically evicts stale visitor entries.
+// It stops when the context is cancelled.
+func (rl *RateLimiter) StartCleanup(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				rl.cleanupVisitors()
+			}
+		}
+	}()
+}
+
+// cleanupVisitors evicts visitor entries not seen in the last 5 minutes.
+func (rl *RateLimiter) cleanupVisitors() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	cutoff := time.Now().Add(-5 * time.Minute)
+	for ip, v := range rl.visitors {
+		if v.lastSeen.Before(cutoff) {
+			delete(rl.visitors, ip)
+		}
+	}
 }
 
 // Middleware returns HTTP middleware that enforces rate limiting.

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestSecurityHeaders_Basic(t *testing.T) {
@@ -336,6 +337,50 @@ func TestChainMiddleware_Multiple(t *testing.T) {
 		if order[i] != v {
 			t.Errorf("Expected order[%d] = %s, got %s", i, v, order[i])
 		}
+	}
+}
+
+func TestRateLimiter_Cleanup(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		Enabled:           true,
+		RequestsPerSecond: 10,
+		Burst:             10,
+	})
+
+	// Add visitors via requests
+	handler := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req1 := httptest.NewRequest("GET", "/", nil)
+	req1.RemoteAddr = "10.0.0.1:1234"
+	handler.ServeHTTP(httptest.NewRecorder(), req1)
+
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.RemoteAddr = "10.0.0.2:1234"
+	handler.ServeHTTP(httptest.NewRecorder(), req2)
+
+	rl.mu.Lock()
+	if len(rl.visitors) != 2 {
+		t.Fatalf("Expected 2 visitors, got %d", len(rl.visitors))
+	}
+	// Backdate one visitor so cleanup will evict it
+	rl.visitors["10.0.0.1"].lastSeen = time.Now().Add(-10 * time.Minute)
+	rl.mu.Unlock()
+
+	rl.cleanupVisitors()
+
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+
+	if len(rl.visitors) != 1 {
+		t.Errorf("Expected 1 visitor after cleanup, got %d", len(rl.visitors))
+	}
+	if _, exists := rl.visitors["10.0.0.2"]; !exists {
+		t.Error("Expected recent visitor 10.0.0.2 to remain")
+	}
+	if _, exists := rl.visitors["10.0.0.1"]; exists {
+		t.Error("Expected stale visitor 10.0.0.1 to be evicted")
 	}
 }
 
