@@ -2,7 +2,7 @@ package collector
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"regexp"
 	"time"
 
@@ -84,12 +84,12 @@ func (c *Collector) Start(ctx context.Context) {
 
 func (c *Collector) collectAndCleanup(ctx context.Context) {
 	if err := c.collect(ctx); err != nil {
-		log.Printf("[%s] Collection error: %v", c.clusterID, err)
+		slog.Error("Collection error", "cluster", c.clusterID, "error", err)
 	}
 
 	if c.retention > 0 {
 		if err := c.cleanup(ctx); err != nil {
-			log.Printf("[%s] Cleanup error: %v", c.clusterID, err)
+			slog.Error("Cleanup error", "cluster", c.clusterID, "error", err)
 		}
 	}
 }
@@ -109,20 +109,20 @@ func (c *Collector) cleanup(ctx context.Context) error {
 		return err
 	}
 	if snapshots > 0 || changes > 0 {
-		log.Printf("[%s] Cleanup: removed %d snapshots, %d changes", c.clusterID, snapshots, changes)
+		slog.Info("Cleanup completed", "cluster", c.clusterID, "snapshots_removed", snapshots, "changes_removed", changes)
 	}
 	return nil
 }
 
 func (c *Collector) collect(ctx context.Context) error {
-	log.Printf("[%s] Collecting cluster settings...", c.clusterID)
+	slog.Info("Collecting cluster settings", "cluster", c.clusterID)
 
 	// Fetch and store source cluster ID and version (only updates if changed)
 	if err := c.updateSourceClusterID(ctx); err != nil {
-		log.Printf("[%s] Warning: failed to update source cluster ID: %v", c.clusterID, err)
+		slog.Warn("Failed to update source cluster ID", "cluster", c.clusterID, "error", err)
 	}
 	if err := c.updateDatabaseVersion(ctx); err != nil {
-		log.Printf("[%s] Warning: failed to update database version: %v", c.clusterID, err)
+		slog.Warn("Failed to update database version", "cluster", c.clusterID, "error", err)
 	}
 
 	// Get the short version for storing with changes
@@ -153,7 +153,7 @@ func (c *Collector) collect(ctx context.Context) error {
 		return err
 	}
 
-	log.Printf("[%s] Collected %d settings", c.clusterID, len(settings))
+	slog.Info("Collected settings", "cluster", c.clusterID, "count", len(settings))
 	return nil
 }
 

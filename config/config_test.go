@@ -387,6 +387,28 @@ clusters:
 	}
 }
 
+func TestParseDurationEnv(t *testing.T) {
+	def := 15 * time.Minute
+
+	os.Setenv("TEST_DUR", "30m")
+	defer os.Unsetenv("TEST_DUR")
+
+	if got := ParseDurationEnv("TEST_DUR", def); got != 30*time.Minute {
+		t.Errorf("ParseDurationEnv = %v, want 30m", got)
+	}
+
+	if got := ParseDurationEnv("NON_EXISTING_DUR_12345", def); got != def {
+		t.Errorf("ParseDurationEnv unset = %v, want %v", got, def)
+	}
+
+	os.Setenv("TEST_DUR_BAD", "invalid")
+	defer os.Unsetenv("TEST_DUR_BAD")
+
+	if got := ParseDurationEnv("TEST_DUR_BAD", def); got != def {
+		t.Errorf("ParseDurationEnv invalid = %v, want %v", got, def)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr, 0))
 }

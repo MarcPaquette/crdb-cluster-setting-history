@@ -4,7 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -23,7 +23,7 @@ type ExportConfig struct {
 
 func RunExport(ctx context.Context, cfg ExportConfig) error {
 	// Connect to history database
-	log.Println("Connecting to history database...")
+	slog.Info("Connecting to history database")
 	store, err := storage.New(ctx, cfg.HistoryURL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to history database: %w", err)
@@ -58,21 +58,21 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 			return fmt.Errorf("failed to list clusters: %w", err)
 		}
 		if len(clusterIDs) == 0 {
-			log.Println("No clusters found in database")
+			slog.Info("No clusters found in database")
 			return nil
 		}
-		log.Printf("Found %d clusters to export", len(clusterIDs))
+		slog.Info("Found clusters to export", "count", len(clusterIDs))
 	} else {
 		// Default: try to get cluster ID from source database, fall back to "default"
 		if cfg.SourceURL != "" {
 			clusterID, err := getSourceClusterID(ctx, cfg.SourceURL)
 			if err != nil {
-				log.Printf("Could not get cluster ID from source: %v, using 'default'", err)
+				slog.Warn("Could not get cluster ID from source, using 'default'", "error", err)
 				clusterIDs = []string{"default"}
 			} else {
 				// Get the config cluster ID that maps to this source cluster ID
 				// For now, just use "default" since we're exporting from history
-				log.Printf("Source cluster ID: %s", clusterID)
+				slog.Info("Source cluster ID", "cluster_id", clusterID)
 				clusterIDs = []string{"default"}
 			}
 		} else {
@@ -84,12 +84,12 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 	for _, clusterID := range clusterIDs {
 		changes, err := store.GetChanges(ctx, clusterID, 100000)
 		if err != nil {
-			log.Printf("Warning: failed to get changes for cluster %s: %v", clusterID, err)
+			slog.Warn("Failed to get changes for cluster", "cluster", clusterID, "error", err)
 			continue
 		}
 
 		if len(changes) == 0 {
-			log.Printf("No changes for cluster %s", clusterID)
+			slog.Info("No changes for cluster", "cluster", clusterID)
 			continue
 		}
 
@@ -111,12 +111,12 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 			return fmt.Errorf("failed to write CSV for cluster %s: %w", clusterID, err)
 		}
 
-		log.Printf("Exported %d changes for cluster %s", len(changes), clusterID)
+		slog.Info("Exported changes for cluster", "cluster", clusterID, "count", len(changes))
 		totalChanges += len(changes)
 	}
 
 	if totalChanges == 0 {
-		log.Println("No changes to export")
+		slog.Info("No changes to export")
 		// Remove empty zip file
 		zipWriter.Close()
 		zipFile.Close()
@@ -124,7 +124,7 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 		return nil
 	}
 
-	log.Printf("Exported %d total changes to %s", totalChanges, outputPath)
+	slog.Info("Export completed", "total_changes", totalChanges, "output", outputPath)
 	return nil
 }
 

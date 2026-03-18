@@ -3,7 +3,7 @@ package collector
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 
 	"crdb-cluster-history/config"
@@ -37,7 +37,7 @@ func NewManager(ctx context.Context, cfg *config.Config, store Store) (*Manager,
 		}
 
 		m.collectors[cluster.ID] = collector
-		log.Printf("Created collector for cluster %s (%s)", cluster.Name, cluster.ID)
+		slog.Info("Created collector", "cluster", cluster.ID, "name", cluster.Name)
 	}
 
 	return m, nil
@@ -51,9 +51,9 @@ func (m *Manager) Start(ctx context.Context) {
 		wg.Add(1)
 		go func(id string, c *Collector) {
 			defer wg.Done()
-			log.Printf("Starting collector for cluster %s", id)
+			slog.Info("Starting collector", "cluster", id)
 			c.Start(ctx)
-			log.Printf("Stopped collector for cluster %s", id)
+			slog.Info("Stopped collector", "cluster", id)
 		}(clusterID, collector)
 	}
 
@@ -67,7 +67,7 @@ func (m *Manager) Close() {
 
 	for id, collector := range m.collectors {
 		collector.Close()
-		log.Printf("Closed collector for cluster %s", id)
+		slog.Info("Closed collector", "cluster", id)
 	}
 }
 

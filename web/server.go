@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -43,6 +43,17 @@ type AnnotationResponse struct {
 type ErrorResponse struct {
 	Error string `json:"error"`
 }
+
+const (
+	// DefaultPageLimit is the number of changes shown on the index page.
+	DefaultPageLimit = 100
+	// MaxExportLimit is the maximum number of changes returned for export.
+	MaxExportLimit = 100_000
+	// DefaultSnapshotLimit is the default number of snapshots returned by the API.
+	DefaultSnapshotLimit = 100
+	// MaxSnapshotLimit is the maximum allowed snapshot limit via the API.
+	MaxSnapshotLimit = 1000
+)
 
 //go:embed templates/*
 var templateFS embed.FS
@@ -168,9 +179,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	clusterID := s.getClusterID(r)
 
-	changes, err := s.store.GetChangesWithAnnotations(ctx, clusterID, 100)
+	changes, err := s.store.GetChangesWithAnnotations(ctx, clusterID, DefaultPageLimit)
 	if err != nil {
-		log.Printf("Error getting changes: %v", err)
+		slog.Error("Error getting changes", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -182,13 +193,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	sourceClusterID, err := s.store.GetSourceClusterID(ctx, clusterID)
 	if err != nil {
-		log.Printf("Error getting source cluster ID: %v", err)
+		slog.Error("Error getting source cluster ID", "error", err)
 		// Don't fail, just leave it empty
 	}
 
 	dbVersion, err := s.store.GetDatabaseVersion(ctx, clusterID)
 	if err != nil {
-		log.Printf("Error getting database version: %v", err)
+		slog.Error("Error getting database version", "error", err)
 		// Don't fail, just leave it empty
 	}
 
@@ -207,7 +218,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("Template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -217,9 +228,9 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	clusterID := s.getClusterID(r)
 
 	// Get all changes
-	changes, err := s.store.GetChanges(ctx, clusterID, 100000)
+	changes, err := s.store.GetChanges(ctx, clusterID, MaxExportLimit)
 	if err != nil {
-		log.Printf("Error getting changes for export: %v", err)
+		slog.Error("Error getting changes for export", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -232,7 +243,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	// Get source cluster ID for filename and CSV
 	sourceClusterID, err := s.store.GetSourceClusterID(ctx, clusterID)
 	if err != nil {
-		log.Printf("Error getting source cluster ID: %v", err)
+		slog.Error("Error getting source cluster ID", "error", err)
 		sourceClusterID = clusterID
 	}
 	if sourceClusterID == "" {
@@ -252,14 +263,14 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	csvFileName := fmt.Sprintf("crdb-cluster-history-%s.csv", sourceClusterID)
 	csvFile, err := zipWriter.Create(csvFileName)
 	if err != nil {
-		log.Printf("Error creating CSV in zip: %v", err)
+		slog.Error("Error creating CSV in zip", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	// Write CSV
 	if err := storage.WriteChangesCSV(csvFile, sourceClusterID, changes); err != nil {
-		log.Printf("Error writing CSV: %v", err)
+		slog.Error("Error writing CSV", "error", err)
 	}
 }
 
@@ -307,6 +318,56 @@ type TimeCompareResult struct {
 	Different  []SettingDiff `json:"different"`   // Settings with different values
 }
 
+// diffResult holds the three-way diff of two setting maps.
+type diffResult struct {
+	OnlyInA   []SettingDiff
+	OnlyInB   []SettingDiff
+	Different []SettingDiff
+}
+
+// compareSettings diffs two setting maps, returning only-in-a, only-in-b, and different entries, sorted by variable name.
+func compareSettings(a, b map[string]storage.Setting) diffResult {
+	result := diffResult{
+		OnlyInA:   []SettingDiff{},
+		OnlyInB:   []SettingDiff{},
+		Different: []SettingDiff{},
+	}
+
+	for variable, sa := range a {
+		sb, exists := b[variable]
+		if !exists {
+			result.OnlyInA = append(result.OnlyInA, SettingDiff{
+				Variable:    variable,
+				Value1:      sa.Value,
+				Description: sa.Description,
+			})
+		} else if sa.Value != sb.Value {
+			result.Different = append(result.Different, SettingDiff{
+				Variable:    variable,
+				Value1:      sa.Value,
+				Value2:      sb.Value,
+				Description: sa.Description,
+			})
+		}
+	}
+
+	for variable, sb := range b {
+		if _, exists := a[variable]; !exists {
+			result.OnlyInB = append(result.OnlyInB, SettingDiff{
+				Variable:    variable,
+				Value2:      sb.Value,
+				Description: sb.Description,
+			})
+		}
+	}
+
+	sort.Slice(result.OnlyInA, func(i, j int) bool { return result.OnlyInA[i].Variable < result.OnlyInA[j].Variable })
+	sort.Slice(result.OnlyInB, func(i, j int) bool { return result.OnlyInB[i].Variable < result.OnlyInB[j].Variable })
+	sort.Slice(result.Different, func(i, j int) bool { return result.Different[i].Variable < result.Different[j].Variable })
+
+	return result
+}
+
 // handleCompare renders the comparison page.
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	data := struct {
@@ -316,7 +377,7 @@ func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.tmpl.ExecuteTemplate(w, "compare.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("Template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -346,65 +407,24 @@ func (s *Server) handleAPICompare(w http.ResponseWriter, r *http.Request) {
 	// Get settings for both clusters
 	settings1, err := s.store.GetLatestSnapshot(ctx, cluster1)
 	if err != nil {
-		log.Printf("Error getting settings for cluster %s: %v", cluster1, err)
+		slog.Error("Error getting settings for cluster", "cluster", cluster1, "error", err)
 		s.jsonError(w, "Failed to get settings for cluster1", http.StatusInternalServerError)
 		return
 	}
 
 	settings2, err := s.store.GetLatestSnapshot(ctx, cluster2)
 	if err != nil {
-		log.Printf("Error getting settings for cluster %s: %v", cluster2, err)
+		slog.Error("Error getting settings for cluster", "cluster", cluster2, "error", err)
 		s.jsonError(w, "Failed to get settings for cluster2", http.StatusInternalServerError)
 		return
 	}
 
-	// Compare settings
+	diff := compareSettings(settings1, settings2)
 	result := CompareResult{
-		Cluster1Only: []SettingDiff{},
-		Cluster2Only: []SettingDiff{},
-		Different:    []SettingDiff{},
+		Cluster1Only: diff.OnlyInA,
+		Cluster2Only: diff.OnlyInB,
+		Different:    diff.Different,
 	}
-
-	// Find settings only in cluster1 or different
-	for variable, setting1 := range settings1 {
-		setting2, exists := settings2[variable]
-		if !exists {
-			result.Cluster1Only = append(result.Cluster1Only, SettingDiff{
-				Variable:    variable,
-				Value1:      setting1.Value,
-				Description: setting1.Description,
-			})
-		} else if setting1.Value != setting2.Value {
-			result.Different = append(result.Different, SettingDiff{
-				Variable:    variable,
-				Value1:      setting1.Value,
-				Value2:      setting2.Value,
-				Description: setting1.Description,
-			})
-		}
-	}
-
-	// Find settings only in cluster2
-	for variable, setting2 := range settings2 {
-		if _, exists := settings1[variable]; !exists {
-			result.Cluster2Only = append(result.Cluster2Only, SettingDiff{
-				Variable:    variable,
-				Value2:      setting2.Value,
-				Description: setting2.Description,
-			})
-		}
-	}
-
-	// Sort results by variable name
-	sort.Slice(result.Cluster1Only, func(i, j int) bool {
-		return result.Cluster1Only[i].Variable < result.Cluster1Only[j].Variable
-	})
-	sort.Slice(result.Cluster2Only, func(i, j int) bool {
-		return result.Cluster2Only[i].Variable < result.Cluster2Only[j].Variable
-	})
-	sort.Slice(result.Different, func(i, j int) bool {
-		return result.Different[i].Variable < result.Different[j].Variable
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
@@ -421,7 +441,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.tmpl.ExecuteTemplate(w, "history.html", data); err != nil {
-		log.Printf("Template error: %v", err)
+		slog.Error("Template error", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -439,9 +459,9 @@ func (s *Server) handleAPISnapshots(w http.ResponseWriter, r *http.Request) {
 	}
 
 	limitStr := r.URL.Query().Get("limit")
-	limit := 100 // default
+	limit := DefaultSnapshotLimit
 	if limitStr != "" {
-		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= 1000 {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 && parsed <= MaxSnapshotLimit {
 			limit = parsed
 		}
 	}
@@ -449,7 +469,7 @@ func (s *Server) handleAPISnapshots(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	snapshots, err := s.store.ListSnapshots(ctx, clusterID, limit)
 	if err != nil {
-		log.Printf("Error listing snapshots for cluster %s: %v", clusterID, err)
+		slog.Error("Error listing snapshots", "cluster", clusterID, "error", err)
 		s.jsonError(w, "Failed to list snapshots", http.StatusInternalServerError)
 		return
 	}
@@ -495,7 +515,7 @@ func (s *Server) handleAPICompareSnapshots(w http.ResponseWriter, r *http.Reques
 	// Get settings for both snapshots
 	settings1, err := s.store.GetSnapshotByID(ctx, snapshot1ID)
 	if err != nil {
-		log.Printf("Error getting snapshot %d: %v", snapshot1ID, err)
+		slog.Error("Error getting snapshot", "snapshot", snapshot1ID, "error", err)
 		s.jsonError(w, "Failed to get snapshot1", http.StatusInternalServerError)
 		return
 	}
@@ -506,7 +526,7 @@ func (s *Server) handleAPICompareSnapshots(w http.ResponseWriter, r *http.Reques
 
 	settings2, err := s.store.GetSnapshotByID(ctx, snapshot2ID)
 	if err != nil {
-		log.Printf("Error getting snapshot %d: %v", snapshot2ID, err)
+		slog.Error("Error getting snapshot", "snapshot", snapshot2ID, "error", err)
 		s.jsonError(w, "Failed to get snapshot2", http.StatusInternalServerError)
 		return
 	}
@@ -515,53 +535,12 @@ func (s *Server) handleAPICompareSnapshots(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Compare settings
+	diff := compareSettings(settings1, settings2)
 	result := TimeCompareResult{
-		BeforeOnly: []SettingDiff{},
-		AfterOnly:  []SettingDiff{},
-		Different:  []SettingDiff{},
+		BeforeOnly: diff.OnlyInA,
+		AfterOnly:  diff.OnlyInB,
+		Different:  diff.Different,
 	}
-
-	// Find settings only in snapshot1 (before) or different
-	for variable, setting1 := range settings1 {
-		setting2, exists := settings2[variable]
-		if !exists {
-			result.BeforeOnly = append(result.BeforeOnly, SettingDiff{
-				Variable:    variable,
-				Value1:      setting1.Value,
-				Description: setting1.Description,
-			})
-		} else if setting1.Value != setting2.Value {
-			result.Different = append(result.Different, SettingDiff{
-				Variable:    variable,
-				Value1:      setting1.Value,
-				Value2:      setting2.Value,
-				Description: setting1.Description,
-			})
-		}
-	}
-
-	// Find settings only in snapshot2 (after)
-	for variable, setting2 := range settings2 {
-		if _, exists := settings1[variable]; !exists {
-			result.AfterOnly = append(result.AfterOnly, SettingDiff{
-				Variable:    variable,
-				Value2:      setting2.Value,
-				Description: setting2.Description,
-			})
-		}
-	}
-
-	// Sort results by variable name
-	sort.Slice(result.BeforeOnly, func(i, j int) bool {
-		return result.BeforeOnly[i].Variable < result.BeforeOnly[j].Variable
-	})
-	sort.Slice(result.AfterOnly, func(i, j int) bool {
-		return result.AfterOnly[i].Variable < result.AfterOnly[j].Variable
-	})
-	sort.Slice(result.Different, func(i, j int) bool {
-		return result.Different[i].Variable < result.Different[j].Variable
-	})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
@@ -594,7 +573,7 @@ func (s *Server) handleAnnotations(w http.ResponseWriter, r *http.Request) {
 
 	ann, err := s.store.CreateAnnotation(r.Context(), req.ChangeID, req.Content, username)
 	if err != nil {
-		log.Printf("Error creating annotation: %v", err)
+		slog.Error("Error creating annotation", "error", err)
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
@@ -639,7 +618,7 @@ func (s *Server) handleAnnotationByID(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getAnnotation(w http.ResponseWriter, r *http.Request, id int64) {
 	ann, err := s.store.GetAnnotation(r.Context(), id)
 	if err != nil {
-		log.Printf("Error getting annotation: %v", err)
+		slog.Error("Error getting annotation", "error", err)
 		s.jsonError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -673,7 +652,7 @@ func (s *Server) updateAnnotation(w http.ResponseWriter, r *http.Request, id int
 		return
 	}
 	if err != nil {
-		log.Printf("Error updating annotation: %v", err)
+		slog.Error("Error updating annotation", "error", err)
 		s.jsonError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -695,7 +674,7 @@ func (s *Server) deleteAnnotation(w http.ResponseWriter, r *http.Request, id int
 		return
 	}
 	if err != nil {
-		log.Printf("Error deleting annotation: %v", err)
+		slog.Error("Error deleting annotation", "error", err)
 		s.jsonError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}

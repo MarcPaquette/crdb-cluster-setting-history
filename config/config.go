@@ -96,9 +96,9 @@ func LoadFromEnv() (*Config, error) {
 			ID:          "default",
 			DatabaseURL: sourceURL,
 		}},
-		PollInterval: Duration(parseDurationEnv("POLL_INTERVAL", 15*time.Minute)),
-		Retention:    Duration(parseDurationEnv("RETENTION", 0)),
-		HTTPPort:     getEnvDefault("HTTP_PORT", "8080"),
+		PollInterval: Duration(ParseDurationEnv("POLL_INTERVAL", 15*time.Minute)),
+		Retention:    Duration(ParseDurationEnv("RETENTION", 0)),
+		HTTPPort:     GetEnvDefault("HTTP_PORT", "8080"),
 	}
 
 	return cfg, nil
@@ -195,16 +195,16 @@ func isValidID(s string) bool {
 	return true
 }
 
-// getEnvDefault returns an environment variable value or a default.
-func getEnvDefault(key, defaultValue string) string {
+// GetEnvDefault returns an environment variable value or a default.
+func GetEnvDefault(key, defaultValue string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return defaultValue
 }
 
-// parseDurationEnv parses a duration from an environment variable.
-func parseDurationEnv(key string, defaultValue time.Duration) time.Duration {
+// ParseDurationEnv parses a duration from an environment variable.
+func ParseDurationEnv(key string, defaultValue time.Duration) time.Duration {
 	s := os.Getenv(key)
 	if s == "" {
 		return defaultValue

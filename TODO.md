@@ -49,11 +49,11 @@ Each item is scoped to be tackled in a single session.
 
 ## Phase 3: Architecture Improvements
 
-- [ ] **Break up monolithic `runServer()` function**
+- [x] **Break up monolithic `runServer()` function**
   - `main.go` — this ~170-line function handles config loading, auth setup, rate limiting, redaction, context creation, storage init, web server init, collector init, middleware chain, HTTP server creation, TLS setup, goroutine launch, and signal handling.
   - Fix: extract into composable helpers like `newHTTPServer()`, `setupMiddleware()`, `setupCollectors()`.
 
-- [ ] **Extract duplicated comparison logic**
+- [x] **Extract duplicated comparison logic**
   - `web/server.go` — `handleAPICompare` and `handleAPICompareSnapshots` contain nearly identical map-diff logic (iterate two `map[string]Setting` maps finding only-in-A, only-in-B, and different entries, then sort).
   - Fix: extract `compareSettings(a, b map[string]Setting) CompareResult`.
 
@@ -61,23 +61,23 @@ Each item is scoped to be tackled in a single session.
   - `storage/store.go` — `initSchema()` runs 10+ DDL statements including `ALTER TABLE` and `CREATE INDEX` on every application startup. In multi-replica deployments, multiple instances will race on these concurrently. No migration versioning, rollback, or locking.
   - Fix: use golang-migrate or goose with a version-tracked migration table and advisory locking.
 
-- [ ] **Adopt `log/slog` for structured logging**
+- [x] **Adopt `log/slog` for structured logging**
   - All packages — everything uses `log.Printf` with no log levels, no structured fields, no correlation IDs. The `[%s]` cluster prefix in collector logs is ad-hoc.
   - Fix: use `log/slog` (stdlib since Go 1.21) for structured, leveled logging.
 
-- [ ] **Replace hand-rolled CLI parsing with `flag` or `cobra`**
+- [x] **Replace hand-rolled CLI parsing with `flag` or `cobra`**
   - `main.go` — export command manually parses `os.Args` with a for-loop. `--cluster` at end of args silently does nothing; no `--help` for subcommands.
   - Fix: use `flag` (stdlib) or `cobra` for proper subcommand handling.
 
-- [ ] **Consolidate duplicated helper functions**
+- [x] **Consolidate duplicated helper functions**
   - `getEnv()` in `main.go` duplicates `getEnvDefault()` in `config/config.go`. `parseDurationEnv()` in `config/config.go` duplicates `getEnvDuration()` in `main.go`. Test helpers (`getTestDB`/`getTestURLs`/`getHistoryURL`) are repeated in 5 test files.
   - Fix: consolidate into a single `internal/envutil` package or similar.
 
-- [ ] **Fix Dockerfile Go version to match go.mod**
+- [x] **Fix Dockerfile Go version to match go.mod**
   - `Dockerfile` uses `golang:1.21-alpine` but `go.mod` specifies a different version. These are inconsistent.
   - Fix: align the Dockerfile base image with the go.mod Go version.
 
-- [ ] **Replace hardcoded limits with named constants or config**
+- [x] **Replace hardcoded limits with named constants or config**
   - `web/server.go` — `100` (index page changes), `100000` (export limit), `100` (default snapshot list), `1000` (max snapshot limit) are scattered magic numbers.
   - Fix: define named constants or make them configurable via environment variables.
 

@@ -3,7 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -16,7 +16,7 @@ type InitConfig struct {
 }
 
 func RunInit(ctx context.Context, cfg InitConfig) error {
-	log.Printf("Connecting to CockroachDB as admin...")
+	slog.Info("Connecting to CockroachDB as admin")
 
 	conn, err := pgx.Connect(ctx, cfg.AdminURL)
 	if err != nil {
@@ -27,24 +27,19 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 	// Check if running in insecure mode
 	insecureMode := isInsecureMode(ctx, conn)
 	if insecureMode {
-		log.Printf("Detected insecure mode - passwords will not be set")
-		log.Printf("")
-		log.Printf("WARNING: Insecure mode is not recommended for production!")
-		log.Printf("  - Database connections are not encrypted")
-		log.Printf("  - Authentication may be bypassed")
-		log.Printf("  - For production, enable TLS with: cockroach start --certs-dir=...")
-		log.Printf("")
+		slog.Warn("Insecure mode detected - passwords will not be set")
+		slog.Warn("Insecure mode is not recommended for production: connections are not encrypted, authentication may be bypassed")
 	}
 
 	// Create database
-	log.Printf("Creating database %q...", cfg.DatabaseName)
+	slog.Info("Creating database", "database", cfg.DatabaseName)
 	_, err = conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", pgx.Identifier{cfg.DatabaseName}.Sanitize()))
 	if err != nil {
 		return fmt.Errorf("failed to create database: %w", err)
 	}
 
 	// Create user
-	log.Printf("Creating user %q...", cfg.Username)
+	slog.Info("Creating user", "user", cfg.Username)
 	// Check if user exists first
 	var exists bool
 	err = conn.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM [SHOW USERS] WHERE username = $1)", cfg.Username).Scan(&exists)
@@ -53,9 +48,9 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 	}
 
 	if exists {
-		log.Printf("User %q already exists", cfg.Username)
+		slog.Info("User already exists", "user", cfg.Username)
 		if !insecureMode && cfg.Password != "" {
-			log.Printf("Updating password for user %q...", cfg.Username)
+			slog.Info("Updating password for user", "user", cfg.Username)
 			_, err = conn.Exec(ctx, fmt.Sprintf("ALTER USER %s WITH PASSWORD $1", pgx.Identifier{cfg.Username}.Sanitize()), cfg.Password)
 			if err != nil {
 				return fmt.Errorf("failed to update user password: %w", err)
@@ -76,7 +71,7 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 	// Grant minimal database-level privileges (least privilege principle)
 	// - CONNECT: required to connect to the database
 	// - CREATE: required for initial schema migration (creating tables)
-	log.Printf("Granting database-level privileges on %q to user %q...", cfg.DatabaseName, cfg.Username)
+	slog.Info("Granting database-level privileges", "database", cfg.DatabaseName, "user", cfg.Username)
 	_, err = conn.Exec(ctx, fmt.Sprintf("GRANT CONNECT, CREATE ON DATABASE %s TO %s",
 		pgx.Identifier{cfg.DatabaseName}.Sanitize(),
 		pgx.Identifier{cfg.Username}.Sanitize()))
@@ -85,27 +80,25 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 	}
 
 	// Switch to the new database and set default table privileges
-	log.Printf("Setting default table privileges (SELECT, INSERT, UPDATE, DELETE only)...")
+	slog.Info("Setting default table privileges (SELECT, INSERT, UPDATE, DELETE only)")
 	_, err = conn.Exec(ctx, fmt.Sprintf("USE %s", pgx.Identifier{cfg.DatabaseName}.Sanitize()))
 	if err != nil {
-		log.Printf("Warning: could not switch to database: %v", err)
+		slog.Warn("Could not switch to database", "error", err)
 	} else {
 		// Grant only data manipulation privileges on tables - not DROP, ALTER, etc.
 		_, err = conn.Exec(ctx, fmt.Sprintf("ALTER DEFAULT PRIVILEGES GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s",
 			pgx.Identifier{cfg.Username}.Sanitize()))
 		if err != nil {
 			// This might fail if not supported, log but continue
-			log.Printf("Warning: could not set default privileges: %v", err)
+			slog.Warn("Could not set default privileges", "error", err)
 		}
 	}
 
-	log.Printf("Initialization complete!")
-	log.Printf("")
-	log.Printf("Set the following environment variable to connect:")
+	slog.Info("Initialization complete")
 	if insecureMode {
-		log.Printf("  export HISTORY_DATABASE_URL=\"postgresql://%s@<host>:26257/%s?sslmode=disable\"", cfg.Username, cfg.DatabaseName)
+		slog.Info("Set HISTORY_DATABASE_URL to connect", "example", fmt.Sprintf("postgresql://%s@<host>:26257/%s?sslmode=disable", cfg.Username, cfg.DatabaseName))
 	} else {
-		log.Printf("  export HISTORY_DATABASE_URL=\"postgresql://%s:<password>@<host>:26257/%s\"", cfg.Username, cfg.DatabaseName)
+		slog.Info("Set HISTORY_DATABASE_URL to connect", "example", fmt.Sprintf("postgresql://%s:<password>@<host>:26257/%s", cfg.Username, cfg.DatabaseName))
 	}
 
 	return nil
