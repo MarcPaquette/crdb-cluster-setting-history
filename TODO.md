@@ -57,7 +57,7 @@ Each item is scoped to be tackled in a single session.
   - `web/server.go` — `handleAPICompare` and `handleAPICompareSnapshots` contain nearly identical map-diff logic (iterate two `map[string]Setting` maps finding only-in-A, only-in-B, and different entries, then sort).
   - Fix: extract `compareSettings(a, b map[string]Setting) CompareResult`.
 
-- [ ] **Use proper migration tooling instead of startup DDL**
+- [x] **Use proper migration tooling instead of startup DDL**
   - `storage/store.go` — `initSchema()` runs 10+ DDL statements including `ALTER TABLE` and `CREATE INDEX` on every application startup. In multi-replica deployments, multiple instances will race on these concurrently. No migration versioning, rollback, or locking.
   - Fix: use golang-migrate or goose with a version-tracked migration table and advisory locking.
 
