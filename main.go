@@ -192,6 +192,7 @@ func setupRateLimiter() *web.RateLimiter {
 		Enabled:           enabled,
 		RequestsPerSecond: getEnvFloat("RATE_LIMIT_RPS", 10),
 		Burst:             getEnvInt("RATE_LIMIT_BURST", 20),
+		TrustProxy:        getEnvBool("TRUST_PROXY", false),
 	})
 	if enabled {
 		slog.Info("Rate limiting enabled", "rps", getEnvFloat("RATE_LIMIT_RPS", 10), "burst", getEnvInt("RATE_LIMIT_BURST", 20))

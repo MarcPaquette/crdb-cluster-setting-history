@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -35,10 +36,20 @@ func TestSecurityHeaders_Basic(t *testing.T) {
 		}
 	}
 
-	// CSP should be set
+	// CSP should use nonce-based script-src instead of unsafe-inline
 	csp := rec.Header().Get("Content-Security-Policy")
 	if csp == "" {
 		t.Error("Expected Content-Security-Policy header to be set")
+	}
+	// Extract just the script-src directive and check it doesn't use unsafe-inline
+	for _, directive := range strings.Split(csp, ";") {
+		d := strings.TrimSpace(directive)
+		if strings.HasPrefix(d, "script-src") && strings.Contains(d, "'unsafe-inline'") {
+			t.Error("CSP script-src should not contain 'unsafe-inline'")
+		}
+	}
+	if !strings.Contains(csp, "'nonce-") {
+		t.Error("CSP should contain a nonce for script-src")
 	}
 
 	// HSTS should NOT be set when TLS is disabled
@@ -184,7 +195,7 @@ func TestGetClientIP_RemoteAddr(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "192.168.1.100:12345"
 
-	ip := getClientIP(req)
+	ip := getClientIP(req, true)
 	if ip != "192.168.1.100" {
 		t.Errorf("Expected 192.168.1.100, got %s", ip)
 	}
@@ -196,7 +207,7 @@ func TestGetClientIP_XForwardedFor(t *testing.T) {
 	req.RemoteAddr = "10.0.0.1:12345"
 	req.Header.Set("X-Forwarded-For", "203.0.113.50")
 
-	ip := getClientIP(req)
+	ip := getClientIP(req, true)
 	if ip != "203.0.113.50" {
 		t.Errorf("Expected 203.0.113.50, got %s", ip)
 	}
@@ -208,7 +219,7 @@ func TestGetClientIP_XForwardedForChain(t *testing.T) {
 	req.RemoteAddr = "10.0.0.1:12345"
 	req.Header.Set("X-Forwarded-For", "203.0.113.50, 70.41.3.18, 150.172.238.178")
 
-	ip := getClientIP(req)
+	ip := getClientIP(req, true)
 	if ip != "203.0.113.50" {
 		t.Errorf("Expected first IP 203.0.113.50, got %s", ip)
 	}
@@ -220,7 +231,7 @@ func TestGetClientIP_XRealIP(t *testing.T) {
 	req.RemoteAddr = "10.0.0.1:12345"
 	req.Header.Set("X-Real-IP", "203.0.113.75")
 
-	ip := getClientIP(req)
+	ip := getClientIP(req, true)
 	if ip != "203.0.113.75" {
 		t.Errorf("Expected 203.0.113.75, got %s", ip)
 	}
@@ -234,9 +245,23 @@ func TestGetClientIP_XForwardedForPrecedence(t *testing.T) {
 	req.Header.Set("X-Real-IP", "203.0.113.75")
 
 	// X-Forwarded-For should take precedence
-	ip := getClientIP(req)
+	ip := getClientIP(req, true)
 	if ip != "203.0.113.50" {
 		t.Errorf("Expected X-Forwarded-For IP 203.0.113.50, got %s", ip)
+	}
+}
+
+func TestGetClientIP_TrustProxyDisabled(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+	req.Header.Set("X-Real-IP", "203.0.113.75")
+
+	// With trustProxy=false, headers should be ignored
+	ip := getClientIP(req, false)
+	if ip != "10.0.0.1" {
+		t.Errorf("Expected RemoteAddr 10.0.0.1, got %s", ip)
 	}
 }
 
@@ -245,7 +270,7 @@ func TestGetClientIP_NoPort(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "192.168.1.100" // No port
 
-	ip := getClientIP(req)
+	ip := getClientIP(req, true)
 	if ip != "192.168.1.100" {
 		t.Errorf("Expected 192.168.1.100, got %s", ip)
 	}

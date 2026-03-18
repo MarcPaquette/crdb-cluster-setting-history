@@ -1212,6 +1212,7 @@ func TestWriteChangesCSV(t *testing.T) {
 	now := time.Now()
 	changes := []Change{
 		{
+			ClusterID:   "test-cluster",
 			DetectedAt:  now,
 			Variable:    "test.setting.one",
 			OldValue:    "old1",
@@ -1220,6 +1221,7 @@ func TestWriteChangesCSV(t *testing.T) {
 			Version:     "v24.1.0",
 		},
 		{
+			ClusterID:   "test-cluster",
 			DetectedAt:  now.Add(-time.Hour),
 			Variable:    "test.setting.two",
 			OldValue:    "",
@@ -1230,7 +1232,7 @@ func TestWriteChangesCSV(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := WriteChangesCSV(&buf, "test-cluster", changes)
+	err := WriteChangesCSV(&buf, changes)
 	if err != nil {
 		t.Fatalf("WriteChangesCSV failed: %v", err)
 	}
@@ -1275,7 +1277,7 @@ func TestWriteChangesCSV(t *testing.T) {
 
 func TestWriteChangesCSVEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	err := WriteChangesCSV(&buf, "test-cluster", []Change{})
+	err := WriteChangesCSV(&buf, []Change{})
 	if err != nil {
 		t.Fatalf("WriteChangesCSV with empty changes failed: %v", err)
 	}

@@ -116,6 +116,11 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
+// Ping verifies connectivity to the database.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
+
 func initSchema(ctx context.Context, pool *pgxpool.Pool) error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS snapshots (
@@ -386,21 +391,11 @@ func (s *Store) ListSnapshots(ctx context.Context, clusterID string, limit int) 
 // GetSnapshotByID retrieves all settings for a specific snapshot by its ID.
 // Returns nil, nil if the snapshot does not exist.
 func (s *Store) GetSnapshotByID(ctx context.Context, snapshotID int64) (map[string]Setting, error) {
-	// First verify the snapshot exists
-	var exists bool
-	err := s.pool.QueryRow(ctx,
-		"SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1)",
-		snapshotID,
-	).Scan(&exists)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, nil
-	}
-
 	rows, err := s.pool.Query(ctx,
-		"SELECT variable, value, setting_type, description FROM settings WHERE snapshot_id = $1",
+		`SELECT s.variable, s.value, s.setting_type, s.description
+		 FROM settings s
+		 JOIN snapshots snap ON snap.id = s.snapshot_id
+		 WHERE s.snapshot_id = $1`,
 		snapshotID,
 	)
 	if err != nil {
@@ -416,7 +411,21 @@ func (s *Store) GetSnapshotByID(ctx context.Context, snapshotID int64) (map[stri
 		}
 		settings[setting.Variable] = setting
 	}
-	return settings, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(settings) == 0 {
+		// Check if the snapshot exists but has no settings
+		var exists bool
+		err := s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM snapshots WHERE id = $1)", snapshotID).Scan(&exists)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, nil
+		}
+	}
+	return settings, nil
 }
 
 func (s *Store) SaveSnapshot(ctx context.Context, clusterID string, settings []Setting, version string) error {
@@ -640,7 +649,8 @@ func (s *Store) ListClusters(ctx context.Context) ([]string, error) {
 }
 
 // WriteChangesCSV writes changes to a CSV format.
-func WriteChangesCSV(w io.Writer, clusterID string, changes []Change) error {
+// Uses each change's ClusterID field for the cluster_id column.
+func WriteChangesCSV(w io.Writer, changes []Change) error {
 	csvWriter := csv.NewWriter(w)
 	defer csvWriter.Flush()
 
@@ -651,7 +661,7 @@ func WriteChangesCSV(w io.Writer, clusterID string, changes []Change) error {
 
 	for _, c := range changes {
 		row := []string{
-			clusterID,
+			c.ClusterID,
 			c.DetectedAt.Format(time.RFC3339),
 			c.Variable,
 			c.Version,

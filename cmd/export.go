@@ -107,7 +107,7 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 		}
 
 		// Write CSV
-		if err := storage.WriteChangesCSV(csvWriter, sourceClusterID, changes); err != nil {
+		if err := storage.WriteChangesCSV(csvWriter, changes); err != nil {
 			return fmt.Errorf("failed to write CSV for cluster %s: %w", clusterID, err)
 		}
 

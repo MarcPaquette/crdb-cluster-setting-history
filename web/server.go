@@ -60,6 +60,7 @@ var templateFS embed.FS
 
 // Store defines the storage operations needed by the web server.
 type Store interface {
+	Ping(ctx context.Context) error
 	GetChanges(ctx context.Context, clusterID string, limit int) ([]storage.Change, error)
 	GetChangesWithAnnotations(ctx context.Context, clusterID string, limit int) ([]storage.ChangeWithAnnotation, error)
 	GetSourceClusterID(ctx context.Context, clusterID string) (string, error)
@@ -139,12 +140,29 @@ func New(store Store, opts ...Option) (*Server, error) {
 }
 
 // getClusterID returns the cluster ID from the request, or the default.
+// Returns empty string if the cluster ID is not in the configured list.
 func (s *Server) getClusterID(r *http.Request) string {
 	clusterID := r.URL.Query().Get("cluster")
 	if clusterID == "" {
 		return s.defaultClusterID
 	}
-	return clusterID
+	if s.isValidCluster(clusterID) {
+		return clusterID
+	}
+	return s.defaultClusterID
+}
+
+// isValidCluster checks if the given cluster ID is in the configured list.
+func (s *Server) isValidCluster(id string) bool {
+	if len(s.clusters) == 0 {
+		return true // No validation when clusters aren't configured
+	}
+	for _, c := range s.clusters {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) Handler() http.Handler {
@@ -164,10 +182,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	// Simple health check - verify we can query the database
-	clusterID := s.getClusterID(r)
-	_, err := s.store.GetChanges(r.Context(), clusterID, 1)
-	if err != nil {
+	if err := s.store.Ping(r.Context()); err != nil {
 		http.Error(w, "unhealthy", http.StatusServiceUnavailable)
 		return
 	}
@@ -209,12 +224,14 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		DatabaseVersion string
 		Changes         []storage.ChangeWithAnnotation
 		Clusters        []config.ClusterConfig
+		Nonce           string
 	}{
 		ClusterID:       sourceClusterID,
 		CurrentCluster:  clusterID,
 		DatabaseVersion: dbVersion,
 		Changes:         changes,
 		Clusters:        s.clusters,
+		Nonce:           GetNonce(ctx),
 	}
 
 	if err := s.tmpl.ExecuteTemplate(w, "index.html", data); err != nil {
@@ -269,7 +286,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write CSV
-	if err := storage.WriteChangesCSV(csvFile, sourceClusterID, changes); err != nil {
+	if err := storage.WriteChangesCSV(csvFile, changes); err != nil {
 		slog.Error("Error writing CSV", "error", err)
 	}
 }
@@ -372,8 +389,10 @@ func compareSettings(a, b map[string]storage.Setting) diffResult {
 func (s *Server) handleCompare(w http.ResponseWriter, r *http.Request) {
 	data := struct {
 		Clusters []config.ClusterConfig
+		Nonce    string
 	}{
 		Clusters: s.clusters,
+		Nonce:    GetNonce(r.Context()),
 	}
 
 	if err := s.tmpl.ExecuteTemplate(w, "compare.html", data); err != nil {
@@ -435,9 +454,11 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	data := struct {
 		Clusters       []config.ClusterConfig
 		CurrentCluster string
+		Nonce          string
 	}{
 		Clusters:       s.clusters,
 		CurrentCluster: s.getClusterID(r),
+		Nonce:          GetNonce(r.Context()),
 	}
 
 	if err := s.tmpl.ExecuteTemplate(w, "history.html", data); err != nil {

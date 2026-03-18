@@ -29,6 +29,7 @@ func TestWriteChangesCSV(t *testing.T) {
 	t.Parallel()
 	changes := []storage.Change{
 		{
+			ClusterID:   "test-cluster-123",
 			DetectedAt:  time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
 			Variable:    "test.setting.one",
 			Version:     "v25.1.0",
@@ -37,6 +38,7 @@ func TestWriteChangesCSV(t *testing.T) {
 			Description: "Test setting",
 		},
 		{
+			ClusterID:   "test-cluster-123",
 			DetectedAt:  time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC),
 			Variable:    "test.setting.two",
 			Version:     "v25.1.0",
@@ -47,7 +49,7 @@ func TestWriteChangesCSV(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := storage.WriteChangesCSV(&buf, "test-cluster-123", changes)
+	err := storage.WriteChangesCSV(&buf, changes)
 	if err != nil {
 		t.Fatalf("WriteChangesCSV failed: %v", err)
 	}
@@ -90,7 +92,7 @@ func TestWriteChangesCSV(t *testing.T) {
 func TestWriteChangesCSVEmptyChanges(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
-	err := storage.WriteChangesCSV(&buf, "test-cluster", []storage.Change{})
+	err := storage.WriteChangesCSV(&buf, []storage.Change{})
 	if err != nil {
 		t.Fatalf("WriteChangesCSV failed: %v", err)
 	}
@@ -190,6 +192,7 @@ func TestWriteChangesCSVWithVersion(t *testing.T) {
 	t.Parallel()
 	changes := []storage.Change{
 		{
+			ClusterID:   "cluster-with-version",
 			DetectedAt:  time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
 			Variable:    "version.test.setting",
 			Version:     "v25.2.0",
@@ -200,7 +203,7 @@ func TestWriteChangesCSVWithVersion(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := storage.WriteChangesCSV(&buf, "cluster-with-version", changes)
+	err := storage.WriteChangesCSV(&buf, changes)
 	if err != nil {
 		t.Fatalf("WriteChangesCSV failed: %v", err)
 	}

@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"net"
 	"net/http"
 	"strings"
@@ -11,37 +13,52 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// contextKey is an unexported type for context keys in this package.
+type contextKey string
+
+// nonceKey is the context key for the CSP nonce.
+const nonceKey contextKey = "cspNonce"
+
+// GetNonce returns the CSP nonce from the request context.
+func GetNonce(ctx context.Context) string {
+	if v, ok := ctx.Value(nonceKey).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// generateNonce creates a cryptographically random base64-encoded nonce.
+func generateNonce() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
+}
+
 // SecurityHeaders returns middleware that adds security headers to responses.
 func SecurityHeaders(tlsEnabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Prevent clickjacking
 			w.Header().Set("X-Frame-Options", "DENY")
-
-			// Prevent MIME type sniffing
 			w.Header().Set("X-Content-Type-Options", "nosniff")
-
-			// XSS protection (legacy but still useful for older browsers)
 			w.Header().Set("X-XSS-Protection", "1; mode=block")
-
-			// Referrer policy
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 
-			// Content Security Policy
-			// Allow inline scripts/styles for the embedded template
+			// Nonce-based CSP — eliminates need for unsafe-inline on scripts
+			nonce := generateNonce()
 			w.Header().Set("Content-Security-Policy",
 				"default-src 'self'; "+
-					"script-src 'self' 'unsafe-inline'; "+
+					"script-src 'self' 'nonce-"+nonce+"'; "+
 					"style-src 'self' 'unsafe-inline'; "+
 					"img-src 'self' data:; "+
 					"frame-ancestors 'none'")
 
-			// HSTS only if TLS is enabled
 			if tlsEnabled || r.TLS != nil {
 				w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 			}
 
-			next.ServeHTTP(w, r)
+			// Store nonce in context for templates
+			ctx := context.WithValue(r.Context(), nonceKey, nonce)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -54,15 +71,19 @@ type RateLimiterConfig struct {
 	Burst int
 	// Enabled controls whether rate limiting is active.
 	Enabled bool
+	// TrustProxy controls whether X-Forwarded-For/X-Real-IP headers are trusted.
+	// When false, only r.RemoteAddr is used for client IP detection.
+	TrustProxy bool
 }
 
 // RateLimiter provides per-IP rate limiting.
 type RateLimiter struct {
-	visitors map[string]*visitorInfo
-	mu       sync.RWMutex
-	rate     rate.Limit
-	burst    int
-	enabled  bool
+	visitors   map[string]*visitorInfo
+	mu         sync.RWMutex
+	rate       rate.Limit
+	burst      int
+	enabled    bool
+	trustProxy bool
 }
 
 type visitorInfo struct {
@@ -73,10 +94,11 @@ type visitorInfo struct {
 // NewRateLimiter creates a new rate limiter.
 func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
 	return &RateLimiter{
-		visitors: make(map[string]*visitorInfo),
-		rate:     rate.Limit(cfg.RequestsPerSecond),
-		burst:    cfg.Burst,
-		enabled:  cfg.Enabled,
+		visitors:   make(map[string]*visitorInfo),
+		rate:       rate.Limit(cfg.RequestsPerSecond),
+		burst:      cfg.Burst,
+		enabled:    cfg.Enabled,
+		trustProxy: cfg.TrustProxy,
 	}
 }
 
@@ -133,7 +155,7 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ip := getClientIP(r)
+		ip := getClientIP(r, rl.trustProxy)
 		if !rl.getLimiter(ip).Allow() {
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
@@ -145,22 +167,21 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 }
 
 // getClientIP extracts the client IP from the request.
-func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For for proxied requests
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Return first IP in chain (original client)
-		if idx := strings.Index(xff, ","); idx != -1 {
-			return strings.TrimSpace(xff[:idx])
+// When trustProxy is true, X-Forwarded-For and X-Real-IP headers are checked.
+// When false, only r.RemoteAddr is used.
+func getClientIP(r *http.Request, trustProxy bool) string {
+	if trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if idx := strings.Index(xff, ","); idx != -1 {
+				return strings.TrimSpace(xff[:idx])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return strings.TrimSpace(xri)
+		}
 	}
 
-	// Check X-Real-IP
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
-
-	// Fall back to remote address
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

@@ -45,6 +45,7 @@ func NewManager(ctx context.Context, cfg *config.Config, store Store) (*Manager,
 
 // Start starts all collectors. This method blocks until the context is cancelled.
 func (m *Manager) Start(ctx context.Context) {
+	m.mu.RLock()
 	var wg sync.WaitGroup
 
 	for clusterID, collector := range m.collectors {
@@ -56,6 +57,7 @@ func (m *Manager) Start(ctx context.Context) {
 			slog.Info("Stopped collector", "cluster", id)
 		}(clusterID, collector)
 	}
+	m.mu.RUnlock()
 
 	wg.Wait()
 }
