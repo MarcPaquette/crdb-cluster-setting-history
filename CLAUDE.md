@@ -29,6 +29,20 @@ go test -v -run TestCollect ./collector/
 go tool cover -func=coverage.out
 ```
 
+## Development Workflow — Red/Green TDD
+
+All changes must follow Red/Green Test-Driven Development:
+
+1. **Red** — Write a failing test first that describes the desired behavior. Run it and confirm it fails.
+2. **Green** — Write the minimal production code to make the test pass. Run the test and confirm it passes.
+3. **Refactor** — Clean up the code while keeping tests green. No behavior changes without a failing test first.
+
+Rules:
+- Never write production code without a failing test that demands it.
+- Each Red/Green cycle should be small — one behavior or edge case at a time.
+- Run the relevant test(s) after each step to verify the expected red or green result.
+- For bug fixes: first write a test that reproduces the bug (red), then fix it (green).
+
 ## Architecture
 
 The service monitors a CockroachDB cluster by periodically querying `SHOW CLUSTER SETTINGS` and storing snapshots in a separate history database. Changes between snapshots are detected and displayed via a web UI.
