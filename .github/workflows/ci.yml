@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (CockroachDB ${{ matrix.crdb-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crdb-version: [v23.2.0, v24.1.8, v24.2.6, v24.3.4]
+
+    env:
+      DATABASE_URL: postgresql://root@localhost:26257/defaultdb?sslmode=disable
+      HISTORY_DATABASE_URL: postgresql://history_test_user@localhost:26257/cluster_history?sslmode=disable
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Start CockroachDB
+        run: |
+          docker run -d --name cockroachdb \
+            -p 26257:26257 -p 8080:8080 \
+            cockroachdb/cockroach:${{ matrix.crdb-version }} \
+            start-single-node --insecure --advertise-addr=localhost
+
+      - name: Wait for CockroachDB
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
+              echo "CockroachDB is ready"
+              exit 0
+            fi
+            echo "Waiting... (attempt $i/30)"
+            sleep 2
+          done
+          echo "CockroachDB failed to start"
+          docker logs cockroachdb
+          exit 1
+
+      - name: Initialize test database
+        run: |
+          docker exec cockroachdb cockroach sql --insecure -e "
+            CREATE DATABASE IF NOT EXISTS cluster_history;
+            CREATE USER IF NOT EXISTS history_test_user;
+            GRANT ALL ON DATABASE cluster_history TO history_test_user;
+          "
+          docker exec cockroachdb cockroach sql --insecure \
+            --database=cluster_history -e "
+            ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO history_test_user;
+          "
+
+      - name: Run tests
+        run: go test -p 1 -race -v -count=1 ./...
+
+      - name: Run tests with coverage
+        if: matrix.crdb-version == 'v24.3.4'
+        run: |
+          go test -p 1 -race -coverprofile=coverage.out -count=1 ./...
+          go tool cover -func=coverage.out
+
+      - name: Upload coverage
+        if: matrix.crdb-version == 'v24.3.4'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+
+      - name: CockroachDB logs on failure
+        if: failure()
+        run: docker logs cockroachdb
