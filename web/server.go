@@ -62,6 +62,7 @@ var templateFS embed.FS
 type Store interface {
 	Ping(ctx context.Context) error
 	GetChanges(ctx context.Context, clusterID string, limit int) ([]storage.Change, error)
+	StreamChanges(ctx context.Context, clusterID string, fn func(storage.Change) error) error
 	GetChangesWithAnnotations(ctx context.Context, clusterID string, limit int) ([]storage.ChangeWithAnnotation, error)
 	GetSourceClusterID(ctx context.Context, clusterID string) (string, error)
 	GetDatabaseVersion(ctx context.Context, clusterID string) (string, error)
@@ -244,20 +245,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	clusterID := s.getClusterID(r)
 
-	// Get all changes
-	changes, err := s.store.GetChanges(ctx, clusterID, MaxExportLimit)
-	if err != nil {
-		slog.Error("Error getting changes for export", "error", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// Apply redaction if configured
-	if s.redactor != nil {
-		changes = s.redactor.RedactChanges(changes)
-	}
-
-	// Get source cluster ID for filename and CSV
+	// Get source cluster ID for filename
 	sourceClusterID, err := s.store.GetSourceClusterID(ctx, clusterID)
 	if err != nil {
 		slog.Error("Error getting source cluster ID", "error", err)
@@ -285,9 +273,26 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Write CSV
-	if err := storage.WriteChangesCSV(csvFile, changes); err != nil {
-		slog.Error("Error writing CSV", "error", err)
+	// Stream changes directly to CSV without buffering all in memory
+	csvWriter := storage.NewCSVChangeWriter(csvFile)
+	if err := csvWriter.WriteHeader(); err != nil {
+		slog.Error("Error writing CSV header", "error", err)
+		return
+	}
+
+	err = s.store.StreamChanges(ctx, clusterID, func(c storage.Change) error {
+		if s.redactor != nil {
+			c = s.redactor.RedactChange(c)
+		}
+		return csvWriter.WriteChange(c)
+	})
+	if err != nil {
+		slog.Error("Error streaming changes to CSV", "error", err)
+	}
+
+	csvWriter.Flush()
+	if err := csvWriter.Error(); err != nil {
+		slog.Error("CSV flush error", "error", err)
 	}
 }
 

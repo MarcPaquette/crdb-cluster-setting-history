@@ -82,17 +82,6 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 
 	totalChanges := 0
 	for _, clusterID := range clusterIDs {
-		changes, err := store.GetChanges(ctx, clusterID, 100000)
-		if err != nil {
-			slog.Warn("Failed to get changes for cluster", "cluster", clusterID, "error", err)
-			continue
-		}
-
-		if len(changes) == 0 {
-			slog.Info("No changes for cluster", "cluster", clusterID)
-			continue
-		}
-
 		// Get source cluster ID for this config cluster ID (if available)
 		sourceClusterID, err := store.GetSourceClusterID(ctx, clusterID)
 		if err != nil || sourceClusterID == "" {
@@ -101,18 +90,36 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 
 		// Create CSV file inside zip
 		csvFileName := fmt.Sprintf("crdb-cluster-history-%s.csv", sourceClusterID)
-		csvWriter, err := zipWriter.Create(csvFileName)
+		csvFile, err := zipWriter.Create(csvFileName)
 		if err != nil {
 			return fmt.Errorf("failed to create CSV in zip for cluster %s: %w", clusterID, err)
 		}
 
-		// Write CSV
-		if err := storage.WriteChangesCSV(csvWriter, changes); err != nil {
-			return fmt.Errorf("failed to write CSV for cluster %s: %w", clusterID, err)
+		// Stream changes directly to CSV
+		csvWriter := storage.NewCSVChangeWriter(csvFile)
+		if err := csvWriter.WriteHeader(); err != nil {
+			return fmt.Errorf("failed to write CSV header for cluster %s: %w", clusterID, err)
 		}
 
-		slog.Info("Exported changes for cluster", "cluster", clusterID, "count", len(changes))
-		totalChanges += len(changes)
+		count := 0
+		err = store.StreamChanges(ctx, clusterID, func(c storage.Change) error {
+			count++
+			return csvWriter.WriteChange(c)
+		})
+		if err != nil {
+			return fmt.Errorf("failed to stream changes for cluster %s: %w", clusterID, err)
+		}
+		csvWriter.Flush()
+		if err := csvWriter.Error(); err != nil {
+			return fmt.Errorf("CSV error for cluster %s: %w", clusterID, err)
+		}
+
+		if count == 0 {
+			slog.Info("No changes for cluster", "cluster", clusterID)
+		} else {
+			slog.Info("Exported changes for cluster", "cluster", clusterID, "count", count)
+		}
+		totalChanges += count
 	}
 
 	if totalChanges == 0 {

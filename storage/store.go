@@ -333,6 +333,33 @@ func (s *Store) GetChanges(ctx context.Context, clusterID string, limit int) ([]
 	return changes, rows.Err()
 }
 
+// StreamChanges calls fn for each change row without buffering all results in memory.
+// This is suitable for large exports where loading all changes at once would use too much memory.
+func (s *Store) StreamChanges(ctx context.Context, clusterID string, fn func(Change) error) error {
+	rows, err := s.pool.Query(ctx,
+		"SELECT cluster_id, detected_at, variable, old_value, new_value, description, version FROM changes WHERE cluster_id = $1 ORDER BY detected_at DESC",
+		clusterID,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var c Change
+		var nf changeNullableFields
+		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &nf.OldValue, &nf.NewValue, &nf.Description, &nf.Version); err != nil {
+			return err
+		}
+		nf.applyTo(&c)
+		if err := fn(c); err != nil {
+			return err
+		}
+	}
+
+	return rows.Err()
+}
+
 // GetAllChanges retrieves changes for all clusters (used for export).
 func (s *Store) GetAllChanges(ctx context.Context, limit int) ([]Change, error) {
 	rows, err := s.pool.Query(ctx,
@@ -454,6 +481,45 @@ func (s *Store) ListClusters(ctx context.Context) ([]string, error) {
 	}
 
 	return clusters, rows.Err()
+}
+
+// NewCSVChangeWriter creates a writer that streams Change records as CSV rows.
+// Call WriteHeader first, then WriteChange for each row, then Flush.
+type CSVChangeWriter struct {
+	w *csv.Writer
+}
+
+// NewCSVChangeWriter creates a new streaming CSV change writer.
+func NewCSVChangeWriter(w io.Writer) *CSVChangeWriter {
+	return &CSVChangeWriter{w: csv.NewWriter(w)}
+}
+
+// WriteHeader writes the CSV header row.
+func (cw *CSVChangeWriter) WriteHeader() error {
+	return cw.w.Write([]string{"cluster_id", "detected_at", "variable", "version", "old_value", "new_value", "description"})
+}
+
+// WriteChange writes a single change as a CSV row.
+func (cw *CSVChangeWriter) WriteChange(c Change) error {
+	return cw.w.Write([]string{
+		c.ClusterID,
+		c.DetectedAt.Format(time.RFC3339),
+		c.Variable,
+		c.Version,
+		c.OldValue,
+		c.NewValue,
+		c.Description,
+	})
+}
+
+// Flush flushes any buffered CSV data.
+func (cw *CSVChangeWriter) Flush() {
+	cw.w.Flush()
+}
+
+// Error returns any error from the underlying CSV writer.
+func (cw *CSVChangeWriter) Error() error {
+	return cw.w.Error()
 }
 
 // WriteChangesCSV writes changes to a CSV format.

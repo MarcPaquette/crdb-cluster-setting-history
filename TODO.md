@@ -97,7 +97,7 @@ Each item is scoped to be tackled in a single session.
   - `web/middleware.go` — `script-src 'self' 'unsafe-inline'` effectively negates CSP's XSS protection.
   - Fix: use nonce-based CSP or extract all JavaScript to external files.
 
-- [ ] **Limit export query size or implement streaming**
+- [x] **Limit export query size or implement streaming**
   - `web/server.go` — `GetChanges(ctx, clusterID, 100000)` loads up to 100K changes into memory before writing the zip. For long-running clusters, this could use significant memory.
   - Fix: implement cursor-based pagination or stream results directly to the zip writer.
 
