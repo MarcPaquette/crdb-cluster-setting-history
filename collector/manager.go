@@ -94,21 +94,32 @@ func (m *Manager) ClusterIDs() []string {
 	return ids
 }
 
-// Collect triggers an immediate collection for all collectors.
+// Collect triggers an immediate collection for all collectors concurrently.
 // Useful for testing or manual trigger.
 func (m *Manager) Collect(ctx context.Context) error {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	var wg sync.WaitGroup
+	errs := make([]error, len(m.collectors))
+	i := 0
+	for _, c := range m.collectors {
+		wg.Add(1)
+		go func(idx int, coll *Collector) {
+			defer wg.Done()
+			errs[idx] = coll.Collect(ctx)
+		}(i, c)
+		i++
+	}
+	m.mu.RUnlock()
+	wg.Wait()
 
-	var errs []error
-	for _, collector := range m.collectors {
-		if err := collector.Collect(ctx); err != nil {
-			errs = append(errs, err)
+	var collectErrs []error
+	for _, err := range errs {
+		if err != nil {
+			collectErrs = append(collectErrs, err)
 		}
 	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("collection errors: %v", errs)
+	if len(collectErrs) > 0 {
+		return fmt.Errorf("collection errors: %v", collectErrs)
 	}
 	return nil
 }

@@ -18,7 +18,7 @@ func uniqueClusterID(t *testing.T) string {
 	return fmt.Sprintf("coll-%s-%d", t.Name(), time.Now().UnixNano())
 }
 
-func TestVersionRegex(t *testing.T) {
+func TestExtractShortVersion(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		input    string
@@ -27,16 +27,16 @@ func TestVersionRegex(t *testing.T) {
 		{"CockroachDB CCL v25.4.2 (go1.22.0)", "v25.4.2"},
 		{"CockroachDB v24.1.0-alpha.1", "v24.1.0"},
 		{"v1.0.0", "v1.0.0"},
-		{"no version here", ""},
-		{"", ""},
+		{"no version here", "no version here"}, // fallback to full string
+		{"", ""},                                // empty stays empty
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			t.Parallel()
-			got := versionRegex.FindString(tt.input)
+			got := extractShortVersion(tt.input)
 			if got != tt.expected {
-				t.Errorf("versionRegex.FindString(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Errorf("extractShortVersion(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}

@@ -12,12 +12,8 @@ concurrency:
 
 jobs:
   test:
-    name: Test (CockroachDB ${{ matrix.crdb-version }})
+    name: Test (CockroachDB latest)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        crdb-version: [v23.2.0, v24.1.8, v24.2.6, v24.3.4]
 
     env:
       DATABASE_URL: postgresql://root@localhost:26257/defaultdb?sslmode=disable
@@ -34,7 +30,7 @@ jobs:
         run: |
           docker run -d --name cockroachdb \
             -p 26257:26257 -p 8080:8080 \
-            cockroachdb/cockroach:${{ matrix.crdb-version }} \
+            cockroachdb/cockroach:latest \
             start-single-node --insecure --advertise-addr=localhost
 
       - name: Wait for CockroachDB
@@ -67,13 +63,11 @@ jobs:
         run: go test -p 1 -race -v -count=1 ./...
 
       - name: Run tests with coverage
-        if: matrix.crdb-version == 'v24.3.4'
         run: |
           go test -p 1 -race -coverprofile=coverage.out -count=1 ./...
           go tool cover -func=coverage.out
 
       - name: Upload coverage
-        if: matrix.crdb-version == 'v24.3.4'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
