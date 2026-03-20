@@ -121,12 +121,17 @@ func (c *Collector) collect(ctx context.Context) error {
 	if err := c.updateSourceClusterID(ctx); err != nil {
 		slog.Warn("Failed to update source cluster ID", "cluster", c.clusterID, "error", err)
 	}
-	if err := c.updateDatabaseVersion(ctx); err != nil {
-		slog.Warn("Failed to update database version", "cluster", c.clusterID, "error", err)
+	// Fetch version once and use for both full version storage and short version extraction
+	fullVersion, err := c.fetchVersion(ctx)
+	if err != nil {
+		slog.Warn("Failed to fetch database version", "cluster", c.clusterID, "error", err)
+	} else {
+		if err := c.store.SetDatabaseVersion(ctx, c.clusterID, fullVersion); err != nil {
+			slog.Warn("Failed to update database version", "cluster", c.clusterID, "error", err)
+		}
 	}
 
-	// Get the short version for storing with changes
-	shortVersion := c.getShortVersion(ctx)
+	shortVersion := extractShortVersion(fullVersion)
 
 	rows, err := c.pool.Query(ctx, "SHOW CLUSTER SETTINGS")
 	if err != nil {
@@ -157,15 +162,16 @@ func (c *Collector) collect(ctx context.Context) error {
 	return nil
 }
 
-// getShortVersion returns the short version string (e.g., "v25.4.2") from the database
-func (c *Collector) getShortVersion(ctx context.Context) string {
-	var fullVersion string
-	err := c.pool.QueryRow(ctx, "SELECT version()").Scan(&fullVersion)
-	if err != nil {
-		return ""
-	}
-	match := versionRegex.FindString(fullVersion)
-	if match != "" {
+// fetchVersion queries the database version string.
+func (c *Collector) fetchVersion(ctx context.Context) (string, error) {
+	var version string
+	err := c.pool.QueryRow(ctx, "SELECT version()").Scan(&version)
+	return version, err
+}
+
+// extractShortVersion extracts the short version (e.g., "v25.4.2") from a full version string.
+func extractShortVersion(fullVersion string) string {
+	if match := versionRegex.FindString(fullVersion); match != "" {
 		return match
 	}
 	return fullVersion
@@ -178,13 +184,4 @@ func (c *Collector) updateSourceClusterID(ctx context.Context) error {
 		return err
 	}
 	return c.store.SetSourceClusterID(ctx, c.clusterID, sourceClusterID)
-}
-
-func (c *Collector) updateDatabaseVersion(ctx context.Context) error {
-	var version string
-	err := c.pool.QueryRow(ctx, "SELECT version()").Scan(&version)
-	if err != nil {
-		return err
-	}
-	return c.store.SetDatabaseVersion(ctx, c.clusterID, version)
 }

@@ -2,7 +2,6 @@ package collector
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -10,20 +9,8 @@ import (
 	"crdb-cluster-history/storage"
 )
 
-func getTestDBs(t *testing.T) (string, string) {
-	sourceURL := os.Getenv("DATABASE_URL")
-	if sourceURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	historyURL := os.Getenv("HISTORY_DATABASE_URL")
-	if historyURL == "" {
-		t.Skip("HISTORY_DATABASE_URL not set")
-	}
-	return sourceURL, historyURL
-}
-
 func TestNewManager(t *testing.T) {
-	sourceURL, historyURL := getTestDBs(t)
+	sourceURL, historyURL := getTestURLs(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -71,7 +58,7 @@ func TestNewManager(t *testing.T) {
 }
 
 func TestNewManagerInvalidURL(t *testing.T) {
-	_, historyURL := getTestDBs(t)
+	_, historyURL := getTestURLs(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -97,7 +84,7 @@ func TestNewManagerInvalidURL(t *testing.T) {
 }
 
 func TestManagerCollect(t *testing.T) {
-	sourceURL, historyURL := getTestDBs(t)
+	sourceURL, historyURL := getTestURLs(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -139,7 +126,7 @@ func TestManagerCollect(t *testing.T) {
 }
 
 func TestManagerClusterIDs(t *testing.T) {
-	sourceURL, historyURL := getTestDBs(t)
+	sourceURL, historyURL := getTestURLs(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
