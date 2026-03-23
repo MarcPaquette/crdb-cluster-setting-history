@@ -17,15 +17,7 @@ func getAdminURL(t *testing.T) string {
 	return url
 }
 
-func TestRunInitInsecureMode(t *testing.T) {
-	adminURL := getAdminURL(t)
-
-	// Use unique names to avoid conflicts
-	timestamp := time.Now().Format("20060102150405")
-	dbName := "test_init_db_" + timestamp
-	userName := "test_init_user_" + timestamp
-
-	// Register cleanup first to ensure it runs even if test fails
+func cleanupInitResources(t *testing.T, adminURL, dbName, userName string) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -39,6 +31,16 @@ func TestRunInitInsecureMode(t *testing.T) {
 		conn.Exec(ctx, "ALTER DEFAULT PRIVILEGES FOR ROLE root REVOKE ALL ON TABLES FROM "+pgx.Identifier{userName}.Sanitize())
 		conn.Exec(ctx, "DROP USER IF EXISTS "+pgx.Identifier{userName}.Sanitize())
 	})
+}
+
+func TestRunInitInsecureMode(t *testing.T) {
+	adminURL := getAdminURL(t)
+
+	timestamp := time.Now().Format("20060102150405")
+	dbName := "test_init_db_" + timestamp
+	userName := "test_init_user_" + timestamp
+
+	cleanupInitResources(t, adminURL, dbName, userName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -55,7 +57,6 @@ func TestRunInitInsecureMode(t *testing.T) {
 		t.Fatalf("RunInit failed: %v", err)
 	}
 
-	// Verify database was created
 	conn, err := pgx.Connect(ctx, adminURL)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
@@ -74,7 +75,6 @@ func TestRunInitInsecureMode(t *testing.T) {
 		t.Errorf("Database %s was not created", cfg.DatabaseName)
 	}
 
-	// Verify user was created
 	var userExists bool
 	err = conn.QueryRow(ctx,
 		"SELECT EXISTS(SELECT 1 FROM [SHOW USERS] WHERE username = $1)",
@@ -95,20 +95,7 @@ func TestRunInitIdempotent(t *testing.T) {
 	dbName := "test_idempotent_db_" + timestamp
 	userName := "test_idempotent_user_" + timestamp
 
-	// Register cleanup first to ensure it runs even if test fails
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		conn, err := pgx.Connect(ctx, adminURL)
-		if err != nil {
-			return
-		}
-		defer conn.Close(ctx)
-		conn.Exec(ctx, "DROP DATABASE IF EXISTS "+pgx.Identifier{dbName}.Sanitize())
-		// Revoke default privileges before dropping user
-		conn.Exec(ctx, "ALTER DEFAULT PRIVILEGES FOR ROLE root REVOKE ALL ON TABLES FROM "+pgx.Identifier{userName}.Sanitize())
-		conn.Exec(ctx, "DROP USER IF EXISTS "+pgx.Identifier{userName}.Sanitize())
-	})
+	cleanupInitResources(t, adminURL, dbName, userName)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -120,7 +107,6 @@ func TestRunInitIdempotent(t *testing.T) {
 		Password:     "",
 	}
 
-	// Run init twice - should not fail
 	err := RunInit(ctx, cfg)
 	if err != nil {
 		t.Fatalf("First RunInit failed: %v", err)
@@ -144,14 +130,10 @@ func TestIsInsecureMode(t *testing.T) {
 	}
 	defer conn.Close(ctx)
 
-	// This test just ensures the function doesn't panic
 	result := isInsecureMode(ctx, conn)
 	t.Logf("isInsecureMode returned: %v", result)
 
-	// If we're connecting with sslmode=disable, it should detect insecure mode
-	if conn.Config().TLSConfig == nil {
-		if !result {
-			t.Log("Warning: Expected insecure mode detection when TLS is disabled")
-		}
+	if conn.Config().TLSConfig == nil && !result {
+		t.Error("Expected insecure mode detection when TLS is disabled")
 	}
 }
