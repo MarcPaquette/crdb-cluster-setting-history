@@ -9,12 +9,9 @@ import (
 	"time"
 
 	"crdb-cluster-history/storage"
-
-	"github.com/jackc/pgx/v5"
 )
 
 type ExportConfig struct {
-	SourceURL  string // Connection to source database (for getting cluster ID)
 	HistoryURL string // Connection to history database
 	OutputPath string // Output file path (empty for default)
 	ClusterID  string // Specific cluster ID to export (empty for all)
@@ -63,21 +60,7 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 		}
 		slog.Info("Found clusters to export", "count", len(clusterIDs))
 	} else {
-		// Default: try to get cluster ID from source database, fall back to "default"
-		if cfg.SourceURL != "" {
-			clusterID, err := getSourceClusterID(ctx, cfg.SourceURL)
-			if err != nil {
-				slog.Warn("Could not get cluster ID from source, using 'default'", "error", err)
-				clusterIDs = []string{"default"}
-			} else {
-				// Get the config cluster ID that maps to this source cluster ID
-				// For now, just use "default" since we're exporting from history
-				slog.Info("Source cluster ID", "cluster_id", clusterID)
-				clusterIDs = []string{"default"}
-			}
-		} else {
-			clusterIDs = []string{"default"}
-		}
+		clusterIDs = []string{"default"}
 	}
 
 	totalChanges := 0
@@ -124,29 +107,13 @@ func RunExport(ctx context.Context, cfg ExportConfig) error {
 
 	if totalChanges == 0 {
 		slog.Info("No changes to export")
-		// Remove empty zip file
-		zipWriter.Close()
-		zipFile.Close()
-		os.Remove(outputPath)
+		// Remove empty zip file (deferred closes handle the writers)
+		if err := os.Remove(outputPath); err != nil {
+			slog.Warn("Failed to remove empty export file", "path", outputPath, "error", err)
+		}
 		return nil
 	}
 
 	slog.Info("Export completed", "total_changes", totalChanges, "output", outputPath)
 	return nil
-}
-
-// getSourceClusterID connects to the source database and gets the cluster ID
-func getSourceClusterID(ctx context.Context, sourceURL string) (string, error) {
-	conn, err := pgx.Connect(ctx, sourceURL)
-	if err != nil {
-		return "", fmt.Errorf("failed to connect to source database: %w", err)
-	}
-	defer conn.Close(ctx)
-
-	var clusterID string
-	err = conn.QueryRow(ctx, "SELECT crdb_internal.cluster_id()::TEXT").Scan(&clusterID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get cluster ID: %w", err)
-	}
-	return clusterID, nil
 }

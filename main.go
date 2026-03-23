@@ -58,7 +58,6 @@ func runExport() {
 	fs.BoolVar(exportAll, "a", false, "Export all clusters (shorthand)")
 	fs.Parse(os.Args[2:])
 
-	sourceURL := os.Getenv("DATABASE_URL")
 	historyURL := os.Getenv("HISTORY_DATABASE_URL")
 	if historyURL == "" {
 		log.Fatal("HISTORY_DATABASE_URL environment variable is required")
@@ -70,7 +69,6 @@ func runExport() {
 	defer cancel()
 
 	cfg := cmd.ExportConfig{
-		SourceURL:  sourceURL,
 		HistoryURL: historyURL,
 		OutputPath: outputPath,
 		ClusterID:  *clusterID,

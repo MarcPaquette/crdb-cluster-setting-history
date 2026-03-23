@@ -111,7 +111,6 @@ func TestWriteChangesCSVEmptyChanges(t *testing.T) {
 }
 
 func TestRunExport(t *testing.T) {
-	sourceURL := getAdminURL(t)
 	historyURL := getHistoryURL(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -149,7 +148,6 @@ func TestRunExport(t *testing.T) {
 	outputPath := filepath.Join(tmpDir, "test-export.zip")
 
 	cfg := ExportConfig{
-		SourceURL:  sourceURL,
 		HistoryURL: historyURL,
 		OutputPath: outputPath,
 	}
@@ -239,7 +237,6 @@ func TestWriteChangesCSVWithVersion(t *testing.T) {
 }
 
 func TestRunExportDefaultPath(t *testing.T) {
-	sourceURL := getAdminURL(t)
 	historyURL := getHistoryURL(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -271,7 +268,6 @@ func TestRunExportDefaultPath(t *testing.T) {
 	defer os.Chdir(originalDir)
 
 	cfg := ExportConfig{
-		SourceURL:  sourceURL,
 		HistoryURL: historyURL,
 		OutputPath: "", // Empty - should use default
 	}
