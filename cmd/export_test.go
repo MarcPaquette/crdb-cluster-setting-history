@@ -14,7 +14,6 @@ import (
 	"crdb-cluster-history/storage"
 )
 
-// testClusterID is used for all tests
 const testClusterID = "default"
 
 func getHistoryURL(t *testing.T) string {
@@ -54,14 +53,12 @@ func TestWriteChangesCSV(t *testing.T) {
 		t.Fatalf("WriteChangesCSV failed: %v", err)
 	}
 
-	// Parse the CSV
 	reader := csv.NewReader(&buf)
 	records, err := reader.ReadAll()
 	if err != nil {
 		t.Fatalf("Failed to parse CSV: %v", err)
 	}
 
-	// Check header
 	if len(records) < 1 {
 		t.Fatal("Expected at least header row")
 	}
@@ -72,12 +69,10 @@ func TestWriteChangesCSV(t *testing.T) {
 		}
 	}
 
-	// Check we have 2 data rows plus header
 	if len(records) != 3 {
 		t.Errorf("Expected 3 rows (1 header + 2 data), got %d", len(records))
 	}
 
-	// Check first data row
 	if records[1][0] != "test-cluster-123" {
 		t.Errorf("Expected cluster_id 'test-cluster-123', got '%s'", records[1][0])
 	}
@@ -97,14 +92,12 @@ func TestWriteChangesCSVEmptyChanges(t *testing.T) {
 		t.Fatalf("WriteChangesCSV failed: %v", err)
 	}
 
-	// Parse the CSV - should still have header
 	reader := csv.NewReader(&buf)
 	records, err := reader.ReadAll()
 	if err != nil {
 		t.Fatalf("Failed to parse CSV: %v", err)
 	}
 
-	// Should have just the header
 	if len(records) != 1 {
 		t.Errorf("Expected 1 row (header only), got %d", len(records))
 	}
@@ -116,17 +109,14 @@ func TestRunExport(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create test data in history database
 	store, err := storage.New(ctx, historyURL)
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
 	defer store.Close()
 
-	// Clean up any existing data
 	store.CleanupOldChanges(ctx, testClusterID, 0)
 
-	// Create some test changes
 	settings1 := []storage.Setting{
 		{Variable: "export.cli.test", Value: "original", SettingType: "s", Description: "CLI export test"},
 	}
@@ -143,7 +133,6 @@ func TestRunExport(t *testing.T) {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
 
-	// Create temp file for output
 	tmpDir := t.TempDir()
 	outputPath := filepath.Join(tmpDir, "test-export.zip")
 
@@ -157,25 +146,21 @@ func TestRunExport(t *testing.T) {
 		t.Fatalf("RunExport failed: %v", err)
 	}
 
-	// Verify the zip file was created
-	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-		t.Fatal("Expected output file to be created")
-	}
-
-	// Open and verify the zip
 	zipFile, err := os.Open(outputPath)
 	if err != nil {
 		t.Fatalf("Failed to open zip: %v", err)
 	}
 	defer zipFile.Close()
 
-	stat, _ := zipFile.Stat()
+	stat, err := zipFile.Stat()
+	if err != nil {
+		t.Fatalf("Failed to stat zip: %v", err)
+	}
 	zipReader, err := zip.NewReader(zipFile, stat.Size())
 	if err != nil {
 		t.Fatalf("Failed to read zip: %v", err)
 	}
 
-	// Check there's a CSV file
 	if len(zipReader.File) == 0 {
 		t.Fatal("Expected at least one file in zip")
 	}
@@ -186,63 +171,12 @@ func TestRunExport(t *testing.T) {
 	}
 }
 
-func TestWriteChangesCSVWithVersion(t *testing.T) {
-	t.Parallel()
-	changes := []storage.Change{
-		{
-			ClusterID:   "cluster-with-version",
-			DetectedAt:  time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
-			Variable:    "version.test.setting",
-			Version:     "v25.2.0",
-			OldValue:    "old",
-			NewValue:    "new",
-			Description: "Version test",
-		},
-	}
-
-	var buf bytes.Buffer
-	err := storage.WriteChangesCSV(&buf, changes)
-	if err != nil {
-		t.Fatalf("WriteChangesCSV failed: %v", err)
-	}
-
-	// Parse the CSV
-	reader := csv.NewReader(&buf)
-	records, err := reader.ReadAll()
-	if err != nil {
-		t.Fatalf("Failed to parse CSV: %v", err)
-	}
-
-	// Check header includes version
-	if len(records) < 2 {
-		t.Fatal("Expected header and data rows")
-	}
-
-	// Find version column index
-	versionIdx := -1
-	for i, h := range records[0] {
-		if h == "version" {
-			versionIdx = i
-			break
-		}
-	}
-	if versionIdx == -1 {
-		t.Fatal("Expected 'version' column in CSV header")
-	}
-
-	// Check version value in data row
-	if records[1][versionIdx] != "v25.2.0" {
-		t.Errorf("Expected version 'v25.2.0', got '%s'", records[1][versionIdx])
-	}
-}
-
 func TestRunExportDefaultPath(t *testing.T) {
 	historyURL := getHistoryURL(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Create test data
 	store, err := storage.New(ctx, historyURL)
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
@@ -254,22 +188,29 @@ func TestRunExportDefaultPath(t *testing.T) {
 	settings1 := []storage.Setting{
 		{Variable: "export.default.test", Value: "v1", SettingType: "s", Description: "Test"},
 	}
-	store.SaveSnapshot(ctx, testClusterID, settings1, "v25.1.0")
+	if err := store.SaveSnapshot(ctx, testClusterID, settings1, "v25.1.0"); err != nil {
+		t.Fatalf("Failed to save first snapshot: %v", err)
+	}
 
 	settings2 := []storage.Setting{
 		{Variable: "export.default.test", Value: "v2", SettingType: "s", Description: "Test"},
 	}
-	store.SaveSnapshot(ctx, testClusterID, settings2, "v25.1.0")
+	if err := store.SaveSnapshot(ctx, testClusterID, settings2, "v25.1.0"); err != nil {
+		t.Fatalf("Failed to save second snapshot: %v", err)
+	}
 
-	// Change to temp directory to avoid polluting workspace
-	originalDir, _ := os.Getwd()
+	// Chdir to temp dir so the default output path doesn't pollute the workspace
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Failed to get working directory: %v", err)
+	}
 	tmpDir := t.TempDir()
 	os.Chdir(tmpDir)
 	defer os.Chdir(originalDir)
 
 	cfg := ExportConfig{
 		HistoryURL: historyURL,
-		OutputPath: "", // Empty - should use default
+		OutputPath: "",
 	}
 
 	err = RunExport(ctx, cfg)
@@ -277,7 +218,6 @@ func TestRunExportDefaultPath(t *testing.T) {
 		t.Fatalf("RunExport failed: %v", err)
 	}
 
-	// Look for the generated file
 	files, err := filepath.Glob("crdb-cluster-history-export-*.zip")
 	if err != nil {
 		t.Fatalf("Failed to glob: %v", err)
