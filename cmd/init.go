@@ -24,8 +24,11 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 	}
 	defer conn.Close(ctx)
 
+	dbName := pgx.Identifier{cfg.DatabaseName}.Sanitize()
+	userName := pgx.Identifier{cfg.Username}.Sanitize()
+
 	// Check if running in insecure mode
-	insecureMode := isInsecureMode(ctx, conn)
+	insecureMode := isInsecureMode(conn)
 	if insecureMode {
 		slog.Warn("Insecure mode detected - passwords will not be set")
 		slog.Warn("Insecure mode is not recommended for production: connections are not encrypted, authentication may be bypassed")
@@ -33,7 +36,7 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 
 	// Create database
 	slog.Info("Creating database", "database", cfg.DatabaseName)
-	_, err = conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", pgx.Identifier{cfg.DatabaseName}.Sanitize()))
+	_, err = conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", dbName))
 	if err != nil {
 		return fmt.Errorf("failed to create database: %w", err)
 	}
@@ -51,7 +54,7 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 		slog.Info("User already exists", "user", cfg.Username)
 		if !insecureMode && cfg.Password != "" {
 			slog.Info("Updating password for user", "user", cfg.Username)
-			_, err = conn.Exec(ctx, fmt.Sprintf("ALTER USER %s WITH PASSWORD $1", pgx.Identifier{cfg.Username}.Sanitize()), cfg.Password)
+			_, err = conn.Exec(ctx, fmt.Sprintf("ALTER USER %s WITH PASSWORD $1", userName), cfg.Password)
 			if err != nil {
 				return fmt.Errorf("failed to update user password: %w", err)
 			}
@@ -59,9 +62,9 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 	} else {
 		if insecureMode || cfg.Password == "" {
 			// Create user without password in insecure mode
-			_, err = conn.Exec(ctx, fmt.Sprintf("CREATE USER IF NOT EXISTS %s", pgx.Identifier{cfg.Username}.Sanitize()))
+			_, err = conn.Exec(ctx, fmt.Sprintf("CREATE USER IF NOT EXISTS %s", userName))
 		} else {
-			_, err = conn.Exec(ctx, fmt.Sprintf("CREATE USER %s WITH PASSWORD $1", pgx.Identifier{cfg.Username}.Sanitize()), cfg.Password)
+			_, err = conn.Exec(ctx, fmt.Sprintf("CREATE USER %s WITH PASSWORD $1", userName), cfg.Password)
 		}
 		if err != nil {
 			return fmt.Errorf("failed to create user: %w", err)
@@ -72,22 +75,19 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 	// - CONNECT: required to connect to the database
 	// - CREATE: required for initial schema migration (creating tables)
 	slog.Info("Granting database-level privileges", "database", cfg.DatabaseName, "user", cfg.Username)
-	_, err = conn.Exec(ctx, fmt.Sprintf("GRANT CONNECT, CREATE ON DATABASE %s TO %s",
-		pgx.Identifier{cfg.DatabaseName}.Sanitize(),
-		pgx.Identifier{cfg.Username}.Sanitize()))
+	_, err = conn.Exec(ctx, fmt.Sprintf("GRANT CONNECT, CREATE ON DATABASE %s TO %s", dbName, userName))
 	if err != nil {
 		return fmt.Errorf("failed to grant database privileges: %w", err)
 	}
 
 	// Switch to the new database and set default table privileges
 	slog.Info("Setting default table privileges (SELECT, INSERT, UPDATE, DELETE only)")
-	_, err = conn.Exec(ctx, fmt.Sprintf("USE %s", pgx.Identifier{cfg.DatabaseName}.Sanitize()))
+	_, err = conn.Exec(ctx, fmt.Sprintf("USE %s", dbName))
 	if err != nil {
 		slog.Warn("Could not switch to database", "error", err)
 	} else {
 		// Grant only data manipulation privileges on tables - not DROP, ALTER, etc.
-		_, err = conn.Exec(ctx, fmt.Sprintf("ALTER DEFAULT PRIVILEGES GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s",
-			pgx.Identifier{cfg.Username}.Sanitize()))
+		_, err = conn.Exec(ctx, fmt.Sprintf("ALTER DEFAULT PRIVILEGES GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s", userName))
 		if err != nil {
 			// This might fail if not supported, log but continue
 			slog.Warn("Could not set default privileges", "error", err)
@@ -106,7 +106,7 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 
 // isInsecureMode checks if CockroachDB is running in insecure mode
 // by checking if the connection was established without TLS.
-func isInsecureMode(_ context.Context, conn *pgx.Conn) bool {
+func isInsecureMode(conn *pgx.Conn) bool {
 	connConfig := conn.Config()
 	return connConfig != nil && connConfig.TLSConfig == nil
 }

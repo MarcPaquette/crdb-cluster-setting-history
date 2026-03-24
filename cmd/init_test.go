@@ -130,7 +130,7 @@ func TestIsInsecureMode(t *testing.T) {
 	}
 	defer conn.Close(ctx)
 
-	result := isInsecureMode(ctx, conn)
+	result := isInsecureMode(conn)
 	t.Logf("isInsecureMode returned: %v", result)
 
 	if conn.Config().TLSConfig == nil && !result {
