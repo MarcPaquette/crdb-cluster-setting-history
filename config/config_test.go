@@ -3,14 +3,23 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
+func writeTestConfig(t *testing.T, content string) string {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "clusters.yaml")
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to write temp config: %v", err)
+	}
+	return configPath
+}
+
 func TestLoad(t *testing.T) {
 	t.Parallel()
-	// Create a temporary config file
-	content := `
+	configPath := writeTestConfig(t, `
 history_database_url: "postgresql://history@localhost:26257/history?sslmode=disable"
 poll_interval: 5m
 retention: 720h
@@ -23,12 +32,7 @@ clusters:
   - name: "Staging"
     id: "staging"
     database_url: "postgresql://readonly@staging:26257/defaultdb?sslmode=disable"
-`
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "clusters.yaml")
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		t.Fatalf("Failed to write temp config: %v", err)
-	}
+`)
 
 	cfg, err := Load(configPath)
 	if err != nil {
@@ -63,19 +67,13 @@ clusters:
 
 func TestLoadDefaults(t *testing.T) {
 	t.Parallel()
-	// Config with minimal settings
-	content := `
+	configPath := writeTestConfig(t, `
 history_database_url: "postgresql://localhost/history"
 clusters:
   - name: "Test"
     id: "test"
     database_url: "postgresql://localhost/test"
-`
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "clusters.yaml")
-	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
-		t.Fatalf("Failed to write temp config: %v", err)
-	}
+`)
 
 	cfg, err := Load(configPath)
 	if err != nil {
@@ -92,17 +90,10 @@ clusters:
 }
 
 func TestLoadFromEnv(t *testing.T) {
-	// Set environment variables
-	os.Setenv("DATABASE_URL", "postgresql://root@localhost:26257/defaultdb")
-	os.Setenv("HISTORY_DATABASE_URL", "postgresql://history@localhost:26257/history")
-	os.Setenv("POLL_INTERVAL", "10m")
-	os.Setenv("HTTP_PORT", "8888")
-	defer func() {
-		os.Unsetenv("DATABASE_URL")
-		os.Unsetenv("HISTORY_DATABASE_URL")
-		os.Unsetenv("POLL_INTERVAL")
-		os.Unsetenv("HTTP_PORT")
-	}()
+	t.Setenv("DATABASE_URL", "postgresql://root@localhost:26257/defaultdb")
+	t.Setenv("HISTORY_DATABASE_URL", "postgresql://history@localhost:26257/history")
+	t.Setenv("POLL_INTERVAL", "10m")
+	t.Setenv("HTTP_PORT", "8888")
 
 	cfg, err := LoadFromEnv()
 	if err != nil {
@@ -130,16 +121,15 @@ func TestLoadFromEnv(t *testing.T) {
 }
 
 func TestLoadFromEnvMissingVars(t *testing.T) {
-	os.Unsetenv("DATABASE_URL")
-	os.Unsetenv("HISTORY_DATABASE_URL")
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("HISTORY_DATABASE_URL", "")
 
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Error("LoadFromEnv() should fail when DATABASE_URL is missing")
 	}
 
-	os.Setenv("DATABASE_URL", "postgresql://localhost/test")
-	defer os.Unsetenv("DATABASE_URL")
+	t.Setenv("DATABASE_URL", "postgresql://localhost/test")
 
 	_, err = LoadFromEnv()
 	if err == nil {
@@ -268,7 +258,7 @@ func TestValidate(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("Validate() should have failed")
-				} else if tt.errMsg != "" && !contains(err.Error(), tt.errMsg) {
+				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 					t.Errorf("Validate() error = %q, want error containing %q", err.Error(), tt.errMsg)
 				}
 			} else if err != nil {
@@ -354,25 +344,15 @@ func TestIsValidID(t *testing.T) {
 
 func TestDurationUnmarshal(t *testing.T) {
 	t.Parallel()
-	content := `
+	configPath := writeTestConfig(t, `
+history_database_url: "postgresql://localhost/history"
 poll_interval: 30s
 retention: 24h
-`
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "test.yaml")
-
-	// Add required fields
-	fullContent := `
-history_database_url: "postgresql://localhost/history"
 clusters:
   - name: "Test"
     id: "test"
     database_url: "postgresql://localhost/test"
-` + content
-
-	if err := os.WriteFile(configPath, []byte(fullContent), 0644); err != nil {
-		t.Fatalf("Failed to write temp config: %v", err)
-	}
+`)
 
 	cfg, err := Load(configPath)
 	if err != nil {
@@ -390,9 +370,7 @@ clusters:
 func TestParseDurationEnv(t *testing.T) {
 	def := 15 * time.Minute
 
-	os.Setenv("TEST_DUR", "30m")
-	defer os.Unsetenv("TEST_DUR")
-
+	t.Setenv("TEST_DUR", "30m")
 	if got := ParseDurationEnv("TEST_DUR", def); got != 30*time.Minute {
 		t.Errorf("ParseDurationEnv = %v, want 30m", got)
 	}
@@ -401,23 +379,8 @@ func TestParseDurationEnv(t *testing.T) {
 		t.Errorf("ParseDurationEnv unset = %v, want %v", got, def)
 	}
 
-	os.Setenv("TEST_DUR_BAD", "invalid")
-	defer os.Unsetenv("TEST_DUR_BAD")
-
+	t.Setenv("TEST_DUR_BAD", "invalid")
 	if got := ParseDurationEnv("TEST_DUR_BAD", def); got != def {
 		t.Errorf("ParseDurationEnv invalid = %v, want %v", got, def)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr, 0))
-}
-
-func containsAt(s, substr string, start int) bool {
-	for i := start; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
