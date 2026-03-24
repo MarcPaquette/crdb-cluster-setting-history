@@ -3,194 +3,124 @@ package auth
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 )
 
-func TestMiddleware_AuthDisabled(t *testing.T) {
-	t.Parallel()
-	cfg := Config{
-		Enabled: false,
-	}
+// Shared bcrypt hash for "secret" — avoids repeating the expensive hash in every test.
+var testPasswordHash, _ = HashPassword("secret")
 
-	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	}))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-}
-
-func TestMiddleware_PublicPath(t *testing.T) {
-	t.Parallel()
-	cfg := Config{
-		Enabled:     true,
-		PublicPaths: []string{"/health"},
-	}
-
-	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	}))
-
-	req := httptest.NewRequest("GET", "/health", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200 for public path, got %d", rec.Code)
-	}
-}
-
-func TestMiddleware_NoCredentials(t *testing.T) {
-	t.Parallel()
-	passwordHash, _ := HashPassword("secret")
-	cfg := Config{
+func testBasicAuthConfig() Config {
+	return Config{
 		Enabled:      true,
 		Username:     "admin",
-		PasswordHash: passwordHash,
+		PasswordHash: testPasswordHash,
+	}
+}
+
+func TestMiddleware(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		config         Config
+		setupRequest   func(*http.Request)
+		expectedStatus int
+	}{
+		{
+			name:           "auth disabled passes through",
+			config:         Config{Enabled: false},
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "public path bypasses auth",
+			config:         Config{Enabled: true, PublicPaths: []string{"/health"}},
+			setupRequest:   func(r *http.Request) { r.URL.Path = "/health" },
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "no credentials returns 401",
+			config:         testBasicAuthConfig(),
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:   "valid basic auth",
+			config: testBasicAuthConfig(),
+			setupRequest: func(r *http.Request) {
+				r.SetBasicAuth("admin", "secret")
+			},
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:   "invalid password",
+			config: testBasicAuthConfig(),
+			setupRequest: func(r *http.Request) {
+				r.SetBasicAuth("admin", "wrongpassword")
+			},
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:   "invalid username",
+			config: testBasicAuthConfig(),
+			setupRequest: func(r *http.Request) {
+				r.SetBasicAuth("wronguser", "secret")
+			},
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:   "valid API key",
+			config: Config{Enabled: true, APIKeys: []string{"test-api-key-123"}},
+			setupRequest: func(r *http.Request) {
+				r.Header.Set("X-API-Key", "test-api-key-123")
+			},
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:   "invalid API key",
+			config: Config{Enabled: true, APIKeys: []string{"test-api-key-123"}},
+			setupRequest: func(r *http.Request) {
+				r.Header.Set("X-API-Key", "wrong-api-key")
+			},
+			expectedStatus: http.StatusUnauthorized,
+		},
 	}
 
-	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := Middleware(tt.config)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tt.setupRequest != nil {
+				tt.setupRequest(req)
+			}
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
+			}
+		})
+	}
+}
+
+func TestMiddleware_NoCredentials_WWWAuthenticate(t *testing.T) {
+	t.Parallel()
+
+	handler := Middleware(testBasicAuthConfig())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-
 	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401, got %d", rec.Code)
-	}
 
 	if rec.Header().Get("WWW-Authenticate") == "" {
 		t.Error("expected WWW-Authenticate header")
-	}
-}
-
-func TestMiddleware_ValidBasicAuth(t *testing.T) {
-	t.Parallel()
-	passwordHash, _ := HashPassword("secret")
-	cfg := Config{
-		Enabled:      true,
-		Username:     "admin",
-		PasswordHash: passwordHash,
-	}
-
-	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	}))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("admin", "secret")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200 with valid credentials, got %d", rec.Code)
-	}
-}
-
-func TestMiddleware_InvalidPassword(t *testing.T) {
-	t.Parallel()
-	passwordHash, _ := HashPassword("secret")
-	cfg := Config{
-		Enabled:      true,
-		Username:     "admin",
-		PasswordHash: passwordHash,
-	}
-
-	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("admin", "wrongpassword")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401 with invalid password, got %d", rec.Code)
-	}
-}
-
-func TestMiddleware_InvalidUsername(t *testing.T) {
-	t.Parallel()
-	passwordHash, _ := HashPassword("secret")
-	cfg := Config{
-		Enabled:      true,
-		Username:     "admin",
-		PasswordHash: passwordHash,
-	}
-
-	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("wronguser", "secret")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401 with invalid username, got %d", rec.Code)
-	}
-}
-
-func TestMiddleware_ValidAPIKey(t *testing.T) {
-	t.Parallel()
-	cfg := Config{
-		Enabled: true,
-		APIKeys: []string{"test-api-key-123"},
-	}
-
-	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	}))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("X-API-Key", "test-api-key-123")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200 with valid API key, got %d", rec.Code)
-	}
-}
-
-func TestMiddleware_InvalidAPIKey(t *testing.T) {
-	t.Parallel()
-	cfg := Config{
-		Enabled: true,
-		APIKeys: []string{"test-api-key-123"},
-	}
-
-	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("X-API-Key", "wrong-api-key")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("expected status 401 with invalid API key, got %d", rec.Code)
 	}
 }
 
@@ -208,15 +138,8 @@ func TestParseAPIKeys(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := ParseAPIKeys(tt.input)
-		if len(result) != len(tt.expected) {
-			t.Errorf("ParseAPIKeys(%q) = %v, expected %v", tt.input, result, tt.expected)
-			continue
-		}
-		for i := range result {
-			if result[i] != tt.expected[i] {
-				t.Errorf("ParseAPIKeys(%q)[%d] = %q, expected %q", tt.input, i, result[i], tt.expected[i])
-			}
+		if got := ParseAPIKeys(tt.input); !slices.Equal(got, tt.expected) {
+			t.Errorf("ParseAPIKeys(%q) = %v, expected %v", tt.input, got, tt.expected)
 		}
 	}
 }
@@ -227,21 +150,14 @@ func TestParsePublicPaths(t *testing.T) {
 		input    string
 		expected []string
 	}{
-		{"", []string{"/health"}}, // default
+		{"", []string{"/health"}},
 		{"/health,/metrics", []string{"/health", "/metrics"}},
 		{" /health , /ready ", []string{"/health", "/ready"}},
 	}
 
 	for _, tt := range tests {
-		result := ParsePublicPaths(tt.input)
-		if len(result) != len(tt.expected) {
-			t.Errorf("ParsePublicPaths(%q) = %v, expected %v", tt.input, result, tt.expected)
-			continue
-		}
-		for i := range result {
-			if result[i] != tt.expected[i] {
-				t.Errorf("ParsePublicPaths(%q)[%d] = %q, expected %q", tt.input, i, result[i], tt.expected[i])
-			}
+		if got := ParsePublicPaths(tt.input); !slices.Equal(got, tt.expected) {
+			t.Errorf("ParsePublicPaths(%q) = %v, expected %v", tt.input, got, tt.expected)
 		}
 	}
 }
@@ -257,7 +173,6 @@ func TestHashPassword(t *testing.T) {
 		t.Error("expected non-empty hash")
 	}
 
-	// Hash should be different each time (due to salt)
 	hash2, _ := HashPassword("testpassword")
 	if string(hash) == string(hash2) {
 		t.Error("expected different hashes due to salt")
