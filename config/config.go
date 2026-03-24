@@ -27,6 +27,11 @@ type Config struct {
 	HTTPPort           string          `yaml:"http_port"`
 }
 
+const (
+	DefaultHTTPPort     = "8080"
+	DefaultPollInterval = 15 * time.Minute
+)
+
 // Duration is a wrapper around time.Duration that supports YAML unmarshaling.
 type Duration time.Duration
 
@@ -67,10 +72,10 @@ func Load(path string) (*Config, error) {
 
 	// Apply defaults
 	if cfg.HTTPPort == "" {
-		cfg.HTTPPort = "8080"
+		cfg.HTTPPort = DefaultHTTPPort
 	}
 	if cfg.PollInterval == 0 {
-		cfg.PollInterval = Duration(15 * time.Minute)
+		cfg.PollInterval = Duration(DefaultPollInterval)
 	}
 
 	return &cfg, nil
@@ -96,9 +101,9 @@ func LoadFromEnv() (*Config, error) {
 			ID:          "default",
 			DatabaseURL: sourceURL,
 		}},
-		PollInterval: Duration(ParseDurationEnv("POLL_INTERVAL", 15*time.Minute)),
+		PollInterval: Duration(ParseDurationEnv("POLL_INTERVAL", DefaultPollInterval)),
 		Retention:    Duration(ParseDurationEnv("RETENTION", 0)),
-		HTTPPort:     GetEnvDefault("HTTP_PORT", "8080"),
+		HTTPPort:     GetEnvDefault("HTTP_PORT", DefaultHTTPPort),
 	}
 
 	return cfg, nil
