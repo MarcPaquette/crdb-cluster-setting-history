@@ -45,14 +45,16 @@ type ErrorResponse struct {
 }
 
 const (
-	// DefaultPageLimit is the number of changes shown on the index page.
-	DefaultPageLimit = 100
-	// MaxExportLimit is the maximum number of changes returned for export.
-	MaxExportLimit = 100_000
-	// DefaultSnapshotLimit is the default number of snapshots returned by the API.
+	DefaultPageLimit     = 100
+	MaxExportLimit       = 100_000
 	DefaultSnapshotLimit = 100
-	// MaxSnapshotLimit is the maximum allowed snapshot limit via the API.
-	MaxSnapshotLimit = 1000
+	MaxSnapshotLimit     = 1000
+
+	defaultClusterIDValue = "default"
+
+	// PostgreSQL error codes
+	pgForeignKeyViolation = "23503"
+	pgUniqueViolation     = "23505"
 )
 
 //go:embed templates/*
@@ -130,7 +132,7 @@ func New(store Store, opts ...Option) (*Server, error) {
 	s := &Server{
 		store:            store,
 		tmpl:             tmpl,
-		defaultClusterID: "default", // Default for backward compatibility
+		defaultClusterID: defaultClusterIDValue,
 	}
 
 	for _, opt := range opts {
@@ -314,8 +316,7 @@ func (s *Server) handleAPIClusters(w http.ResponseWriter, r *http.Request) {
 		clusters[i] = ClusterInfo{ID: c.ID, Name: c.Name}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(clusters)
+	jsonResponse(w, http.StatusOK, clusters)
 }
 
 // CompareResult represents the comparison between two clusters.
@@ -450,8 +451,7 @@ func (s *Server) handleAPICompare(w http.ResponseWriter, r *http.Request) {
 		Different:    diff.Different,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	jsonResponse(w, http.StatusOK, result)
 }
 
 // handleHistory renders the time-based comparison page.
@@ -500,8 +500,7 @@ func (s *Server) handleAPISnapshots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(snapshots)
+	jsonResponse(w, http.StatusOK, snapshots)
 }
 
 // handleAPICompareSnapshots returns the comparison between two snapshots as JSON.
@@ -568,8 +567,7 @@ func (s *Server) handleAPICompareSnapshots(w http.ResponseWriter, r *http.Reques
 		Different:  diff.Different,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	jsonResponse(w, http.StatusOK, result)
 }
 
 // handleAnnotations handles POST /api/annotations to create a new annotation.
@@ -603,10 +601,10 @@ func (s *Server) handleAnnotations(w http.ResponseWriter, r *http.Request) {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
 			switch pgErr.Code {
-			case "23503": // foreign_key_violation
+			case pgForeignKeyViolation:
 				s.jsonError(w, "Change not found", http.StatusNotFound)
 				return
-			case "23505": // unique_violation
+			case pgUniqueViolation:
 				s.jsonError(w, "Annotation already exists for this change", http.StatusConflict)
 				return
 			}
@@ -615,9 +613,7 @@ func (s *Server) handleAnnotations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(s.annotationToResponse(ann))
+	jsonResponse(w, http.StatusCreated, s.annotationToResponse(ann))
 }
 
 // handleAnnotationByID handles GET, PUT, DELETE /api/annotations/{id}
@@ -653,8 +649,7 @@ func (s *Server) getAnnotation(w http.ResponseWriter, r *http.Request, id int64)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.annotationToResponse(ann))
+	jsonResponse(w, http.StatusOK, s.annotationToResponse(ann))
 }
 
 func (s *Server) updateAnnotation(w http.ResponseWriter, r *http.Request, id int64) {
@@ -689,8 +684,7 @@ func (s *Server) updateAnnotation(w http.ResponseWriter, r *http.Request, id int
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.annotationToResponse(ann))
+	jsonResponse(w, http.StatusOK, s.annotationToResponse(ann))
 }
 
 func (s *Server) deleteAnnotation(w http.ResponseWriter, r *http.Request, id int64) {
@@ -710,10 +704,14 @@ func (s *Server) deleteAnnotation(w http.ResponseWriter, r *http.Request, id int
 
 // Helper methods
 
-func (s *Server) jsonError(w http.ResponseWriter, message string, status int) {
+func jsonResponse(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(ErrorResponse{Error: message})
+	json.NewEncoder(w).Encode(data)
+}
+
+func (s *Server) jsonError(w http.ResponseWriter, message string, status int) {
+	jsonResponse(w, status, ErrorResponse{Error: message})
 }
 
 func (s *Server) annotationToResponse(a *storage.Annotation) AnnotationResponse {
@@ -723,9 +721,7 @@ func (s *Server) annotationToResponse(a *storage.Annotation) AnnotationResponse 
 		Content:   a.Content,
 		CreatedBy: a.CreatedBy,
 		CreatedAt: a.CreatedAt.Format(time.RFC3339),
-	}
-	if a.UpdatedBy != "" {
-		resp.UpdatedBy = a.UpdatedBy
+		UpdatedBy: a.UpdatedBy,
 	}
 	if !a.UpdatedAt.IsZero() {
 		resp.UpdatedAt = a.UpdatedAt.Format(time.RFC3339)
@@ -734,11 +730,8 @@ func (s *Server) annotationToResponse(a *storage.Annotation) AnnotationResponse 
 }
 
 func (s *Server) getUsernameFromRequest(r *http.Request) string {
-	username, _, ok := r.BasicAuth()
-	if ok && username != "" {
-		return username
-	}
-	return ""
+	username, _, _ := r.BasicAuth()
+	return username
 }
 
 func (s *Server) redactChangesWithAnnotations(changes []storage.ChangeWithAnnotation) []storage.ChangeWithAnnotation {
