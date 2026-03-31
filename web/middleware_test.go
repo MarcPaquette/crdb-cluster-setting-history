@@ -8,11 +8,13 @@ import (
 	"time"
 )
 
+var okHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+})
+
 func TestSecurityHeaders_Basic(t *testing.T) {
 	t.Parallel()
-	handler := SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := SecurityHeaders(false)(okHandler)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
@@ -60,9 +62,7 @@ func TestSecurityHeaders_Basic(t *testing.T) {
 
 func TestSecurityHeaders_WithTLS(t *testing.T) {
 	t.Parallel()
-	handler := SecurityHeaders(true)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := SecurityHeaders(true)(okHandler)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
@@ -87,9 +87,7 @@ func TestRateLimiter_Disabled(t *testing.T) {
 		Burst:             1,
 	})
 
-	handler := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := rl.Middleware(okHandler)
 
 	// Should allow all requests when disabled
 	for i := 0; i < 10; i++ {
@@ -113,9 +111,7 @@ func TestRateLimiter_Enabled(t *testing.T) {
 		Burst:             2, // Allow 2 requests initially
 	})
 
-	handler := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := rl.Middleware(okHandler)
 
 	// First 2 requests should succeed (burst)
 	for i := 0; i < 2; i++ {
@@ -155,9 +151,7 @@ func TestRateLimiter_PerIP(t *testing.T) {
 		Burst:             1,
 	})
 
-	handler := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := rl.Middleware(okHandler)
 
 	// First IP uses its quota
 	req1 := httptest.NewRequest("GET", "/", nil)
@@ -190,89 +184,36 @@ func TestRateLimiter_PerIP(t *testing.T) {
 	}
 }
 
-func TestGetClientIP_RemoteAddr(t *testing.T) {
+func TestGetClientIP(t *testing.T) {
 	t.Parallel()
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "192.168.1.100:12345"
-
-	ip := getClientIP(req, true)
-	if ip != "192.168.1.100" {
-		t.Errorf("Expected 192.168.1.100, got %s", ip)
+	tests := []struct {
+		name       string
+		remoteAddr string
+		headers    map[string]string
+		trustProxy bool
+		expected   string
+	}{
+		{"RemoteAddr", "192.168.1.100:12345", nil, true, "192.168.1.100"},
+		{"XForwardedFor", "10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.50"}, true, "203.0.113.50"},
+		{"XForwardedForChain", "10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.50, 70.41.3.18, 150.172.238.178"}, true, "203.0.113.50"},
+		{"XRealIP", "10.0.0.1:12345", map[string]string{"X-Real-IP": "203.0.113.75"}, true, "203.0.113.75"},
+		{"XForwardedForPrecedence", "10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.50", "X-Real-IP": "203.0.113.75"}, true, "203.0.113.50"},
+		{"TrustProxyDisabled", "10.0.0.1:12345", map[string]string{"X-Forwarded-For": "203.0.113.50", "X-Real-IP": "203.0.113.75"}, false, "10.0.0.1"},
+		{"NoPort", "192.168.1.100", nil, true, "192.168.1.100"},
 	}
-}
 
-func TestGetClientIP_XForwardedFor(t *testing.T) {
-	t.Parallel()
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "10.0.0.1:12345"
-	req.Header.Set("X-Forwarded-For", "203.0.113.50")
-
-	ip := getClientIP(req, true)
-	if ip != "203.0.113.50" {
-		t.Errorf("Expected 203.0.113.50, got %s", ip)
-	}
-}
-
-func TestGetClientIP_XForwardedForChain(t *testing.T) {
-	t.Parallel()
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "10.0.0.1:12345"
-	req.Header.Set("X-Forwarded-For", "203.0.113.50, 70.41.3.18, 150.172.238.178")
-
-	ip := getClientIP(req, true)
-	if ip != "203.0.113.50" {
-		t.Errorf("Expected first IP 203.0.113.50, got %s", ip)
-	}
-}
-
-func TestGetClientIP_XRealIP(t *testing.T) {
-	t.Parallel()
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "10.0.0.1:12345"
-	req.Header.Set("X-Real-IP", "203.0.113.75")
-
-	ip := getClientIP(req, true)
-	if ip != "203.0.113.75" {
-		t.Errorf("Expected 203.0.113.75, got %s", ip)
-	}
-}
-
-func TestGetClientIP_XForwardedForPrecedence(t *testing.T) {
-	t.Parallel()
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "10.0.0.1:12345"
-	req.Header.Set("X-Forwarded-For", "203.0.113.50")
-	req.Header.Set("X-Real-IP", "203.0.113.75")
-
-	// X-Forwarded-For should take precedence
-	ip := getClientIP(req, true)
-	if ip != "203.0.113.50" {
-		t.Errorf("Expected X-Forwarded-For IP 203.0.113.50, got %s", ip)
-	}
-}
-
-func TestGetClientIP_TrustProxyDisabled(t *testing.T) {
-	t.Parallel()
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "10.0.0.1:12345"
-	req.Header.Set("X-Forwarded-For", "203.0.113.50")
-	req.Header.Set("X-Real-IP", "203.0.113.75")
-
-	// With trustProxy=false, headers should be ignored
-	ip := getClientIP(req, false)
-	if ip != "10.0.0.1" {
-		t.Errorf("Expected RemoteAddr 10.0.0.1, got %s", ip)
-	}
-}
-
-func TestGetClientIP_NoPort(t *testing.T) {
-	t.Parallel()
-	req := httptest.NewRequest("GET", "/", nil)
-	req.RemoteAddr = "192.168.1.100" // No port
-
-	ip := getClientIP(req, true)
-	if ip != "192.168.1.100" {
-		t.Errorf("Expected 192.168.1.100, got %s", ip)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequest("GET", "/", nil)
+			req.RemoteAddr = tt.remoteAddr
+			for k, v := range tt.headers {
+				req.Header.Set(k, v)
+			}
+			if got := getClientIP(req, tt.trustProxy); got != tt.expected {
+				t.Errorf("getClientIP() = %s, expected %s", got, tt.expected)
+			}
+		})
 	}
 }
 
@@ -387,10 +328,7 @@ func TestRateLimiter_Cleanup(t *testing.T) {
 		Burst:             10,
 	})
 
-	// Add visitors via requests
-	handler := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := rl.Middleware(okHandler)
 
 	req1 := httptest.NewRequest("GET", "/", nil)
 	req1.RemoteAddr = "10.0.0.1:1234"
