@@ -19,7 +19,6 @@ import (
 	"crdb-cluster-history/storage"
 )
 
-// testClusterID is used for all tests
 const testClusterID = "default"
 
 func getTestDB(t *testing.T) string {
@@ -33,40 +32,42 @@ func getTestDB(t *testing.T) string {
 	return url
 }
 
-func TestNew(t *testing.T) {
+func setupTestStore(t *testing.T) (context.Context, *storage.Store) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
+	t.Cleanup(cancel)
 	store, err := storage.New(ctx, getTestDB(t))
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { store.Close() })
+	return ctx, store
+}
+
+func setupTest(t *testing.T, opts ...Option) (context.Context, *storage.Store, *Server) {
+	t.Helper()
+	ctx, store := setupTestStore(t)
+	server, err := New(store, opts...)
+	if err != nil {
+		t.Fatalf("Failed to create web server: %v", err)
+	}
+	return ctx, store, server
+}
+
+func TestNew(t *testing.T) {
+	_, store := setupTestStore(t)
 
 	server, err := New(store)
 	if err != nil {
 		t.Fatalf("Failed to create web server: %v", err)
 	}
-
 	if server == nil {
 		t.Fatal("Expected non-nil server")
 	}
 }
 
 func TestHandler(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	handler := server.Handler()
 	if handler == nil {
@@ -75,40 +76,22 @@ func TestHandler(t *testing.T) {
 }
 
 func TestHandleIndex(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	_, _, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Create a test request
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
-
-	// Serve the request
 	server.Handler().ServeHTTP(w, req)
 
-	// Check response
 	resp := w.Result()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	// Check content type
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.Contains(contentType, "text/html") {
 		t.Errorf("Expected text/html content type, got %s", contentType)
 	}
 
-	// Check body contains expected elements
 	body := w.Body.String()
 	if !strings.Contains(body, "CockroachDB Cluster Settings History") {
 		t.Error("Expected page title in response")
@@ -119,45 +102,26 @@ func TestHandleIndex(t *testing.T) {
 }
 
 func TestHandleIndexWithChanges(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, store, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	// Create some test data
 	settings1 := []storage.Setting{
 		{Variable: "web.test.setting", Value: "original", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0.0")
-	if err != nil {
+	if err := store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0.0"); err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
 
 	settings2 := []storage.Setting{
 		{Variable: "web.test.setting", Value: "modified", SettingType: "s", Description: "Test"},
 	}
-	err = store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0.0")
-	if err != nil {
+	if err := store.SaveSnapshot(ctx, testClusterID, settings2, "v1.0.0"); err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
 
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Create a test request
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
-
-	// Serve the request
 	server.Handler().ServeHTTP(w, req)
 
-	// Check response contains table
 	body := w.Body.String()
 	if !strings.Contains(body, "<table>") {
 		t.Error("Expected table in response when changes exist")
@@ -168,28 +132,12 @@ func TestHandleIndexWithChanges(t *testing.T) {
 }
 
 func TestHandleIndexNoChanges(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	_, _, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Create a test request
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
-
-	// Serve the request
 	server.Handler().ServeHTTP(w, req)
 
-	// Response should still be OK even with no changes
 	resp := w.Result()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -197,34 +145,17 @@ func TestHandleIndexNoChanges(t *testing.T) {
 }
 
 func TestHandleHealth(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	_, _, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Create a test request to /health
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
-
-	// Serve the request
 	server.Handler().ServeHTTP(w, req)
 
-	// Check response
 	resp := w.Result()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	// Check body contains "ok"
 	body := w.Body.String()
 	if body != "ok" {
 		t.Errorf("Expected body 'ok', got '%s'", body)
@@ -232,40 +163,22 @@ func TestHandleHealth(t *testing.T) {
 }
 
 func TestHandleExport(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	_, _, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Create a test request to /export
 	req := httptest.NewRequest(http.MethodGet, "/export", nil)
 	w := httptest.NewRecorder()
-
-	// Serve the request
 	server.Handler().ServeHTTP(w, req)
 
-	// Check response
 	resp := w.Result()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	// Check content type is zip
 	contentType := resp.Header.Get("Content-Type")
 	if contentType != "application/zip" {
 		t.Errorf("Expected application/zip content type, got %s", contentType)
 	}
 
-	// Check content disposition header
 	disposition := resp.Header.Get("Content-Disposition")
 	if !strings.Contains(disposition, "attachment") {
 		t.Error("Expected Content-Disposition to contain 'attachment'")
@@ -276,40 +189,22 @@ func TestHandleExport(t *testing.T) {
 }
 
 func TestHandleExportZipContainsCSV(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	_, _, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Create a test request to /export
 	req := httptest.NewRequest(http.MethodGet, "/export", nil)
 	w := httptest.NewRecorder()
-
-	// Serve the request
 	server.Handler().ServeHTTP(w, req)
 
-	// Read the zip file
 	body := w.Body.Bytes()
 	zipReader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
 	if err != nil {
 		t.Fatalf("Failed to read zip: %v", err)
 	}
 
-	// Check there's at least one file in the zip
 	if len(zipReader.File) == 0 {
 		t.Fatal("Expected at least one file in zip")
 	}
 
-	// Check the first file is a CSV
 	csvFile := zipReader.File[0]
 	if !strings.HasSuffix(csvFile.Name, ".csv") {
 		t.Errorf("Expected CSV file, got %s", csvFile.Name)
@@ -317,55 +212,34 @@ func TestHandleExportZipContainsCSV(t *testing.T) {
 }
 
 func TestHandleExportWithChanges(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, store, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	// Clean up any existing data first
 	store.CleanupOldChanges(ctx, testClusterID, 0)
 
-	// Create some test data
 	settings1 := []storage.Setting{
 		{Variable: "export.test.setting", Value: "original", SettingType: "s", Description: "Export test"},
 	}
-	err = store.SaveSnapshot(ctx, testClusterID, settings1, "v25.1.0")
-	if err != nil {
+	if err := store.SaveSnapshot(ctx, testClusterID, settings1, "v25.1.0"); err != nil {
 		t.Fatalf("Failed to save first snapshot: %v", err)
 	}
 
 	settings2 := []storage.Setting{
 		{Variable: "export.test.setting", Value: "modified", SettingType: "s", Description: "Export test"},
 	}
-	err = store.SaveSnapshot(ctx, testClusterID, settings2, "v25.1.0")
-	if err != nil {
+	if err := store.SaveSnapshot(ctx, testClusterID, settings2, "v25.1.0"); err != nil {
 		t.Fatalf("Failed to save second snapshot: %v", err)
 	}
 
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Create a test request to /export
 	req := httptest.NewRequest(http.MethodGet, "/export", nil)
 	w := httptest.NewRecorder()
-
-	// Serve the request
 	server.Handler().ServeHTTP(w, req)
 
-	// Read the zip file
 	body := w.Body.Bytes()
 	zipReader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
 	if err != nil {
 		t.Fatalf("Failed to read zip: %v", err)
 	}
 
-	// Open the CSV file
 	csvFile := zipReader.File[0]
 	rc, err := csvFile.Open()
 	if err != nil {
@@ -373,20 +247,17 @@ func TestHandleExportWithChanges(t *testing.T) {
 	}
 	defer rc.Close()
 
-	// Read CSV content
 	csvContent, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatalf("Failed to read CSV content: %v", err)
 	}
 
-	// Parse CSV
 	csvReader := csv.NewReader(bytes.NewReader(csvContent))
 	records, err := csvReader.ReadAll()
 	if err != nil {
 		t.Fatalf("Failed to parse CSV: %v", err)
 	}
 
-	// Check header
 	if len(records) < 1 {
 		t.Fatal("Expected at least header row in CSV")
 	}
@@ -398,7 +269,6 @@ func TestHandleExportWithChanges(t *testing.T) {
 		}
 	}
 
-	// Check that our test data is in the export
 	found := false
 	for _, record := range records[1:] {
 		if len(record) >= 3 && record[2] == "export.test.setting" {
@@ -412,56 +282,36 @@ func TestHandleExportWithChanges(t *testing.T) {
 }
 
 func TestHandleExportWithClusterID(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, store, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	// Set a test source cluster ID
 	sourceClusterID := "test-cluster-export-12345"
-	err = store.SetSourceClusterID(ctx, testClusterID, sourceClusterID)
-	if err != nil {
+	if err := store.SetSourceClusterID(ctx, testClusterID, sourceClusterID); err != nil {
 		t.Fatalf("Failed to set source cluster ID: %v", err)
 	}
 
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Create a test request to /export
 	req := httptest.NewRequest(http.MethodGet, "/export", nil)
 	w := httptest.NewRecorder()
-
-	// Serve the request
 	server.Handler().ServeHTTP(w, req)
 
-	// Read the zip file
 	body := w.Body.Bytes()
 	zipReader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
 	if err != nil {
 		t.Fatalf("Failed to read zip: %v", err)
 	}
 
-	// Check the CSV filename contains the source cluster ID
 	csvFile := zipReader.File[0]
 	if !strings.Contains(csvFile.Name, sourceClusterID) {
 		t.Errorf("Expected CSV filename to contain source cluster ID, got %s", csvFile.Name)
 	}
 }
 
-// cleanupAnnotationTestData cleans up test data for annotation tests
 func cleanupAnnotationTestData(t *testing.T, store *storage.Store, ctx context.Context) {
 	t.Helper()
 	store.CleanupOldChanges(ctx, testClusterID, 0)
 }
 
-// createTestChange creates a change and returns its ID
 func createTestChange(t *testing.T, store *storage.Store, ctx context.Context) int64 {
+	t.Helper()
 	settings1 := []storage.Setting{{Variable: "api.test.setting", Value: "v1", SettingType: "s", Description: "API Test"}}
 	store.SaveSnapshot(ctx, testClusterID, settings1, "v1.0")
 	settings2 := []storage.Setting{{Variable: "api.test.setting", Value: "v2", SettingType: "s", Description: "API Test"}}
@@ -475,25 +325,12 @@ func createTestChange(t *testing.T, store *storage.Store, ctx context.Context) i
 }
 
 func TestAnnotationAPI_Create(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
+	ctx, store, server := setupTest(t)
 
 	cleanupAnnotationTestData(t, store, ctx)
 	changeID := createTestChange(t, store, ctx)
 
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Test POST /api/annotations
-	body := strings.NewReader(`{"change_id":` + itoa(changeID) + `,"content":"API test note"}`)
+	body := strings.NewReader(fmt.Sprintf(`{"change_id":%d,"content":"API test note"}`, changeID))
 	req := httptest.NewRequest(http.MethodPost, "/api/annotations", body)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -504,7 +341,6 @@ func TestAnnotationAPI_Create(t *testing.T) {
 		t.Errorf("Expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Verify response contains the annotation
 	respBody := w.Body.String()
 	if !strings.Contains(respBody, "API test note") {
 		t.Errorf("Expected response to contain 'API test note', got %s", respBody)
@@ -515,24 +351,12 @@ func TestAnnotationAPI_Create(t *testing.T) {
 }
 
 func TestAnnotationAPI_CreateWithBasicAuth(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
+	ctx, store, server := setupTest(t)
 
 	cleanupAnnotationTestData(t, store, ctx)
 	changeID := createTestChange(t, store, ctx)
 
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	body := strings.NewReader(`{"change_id":` + itoa(changeID) + `,"content":"Auth test note"}`)
+	body := strings.NewReader(fmt.Sprintf(`{"change_id":%d,"content":"Auth test note"}`, changeID))
 	req := httptest.NewRequest(http.MethodPost, "/api/annotations", body)
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("testadmin", "password")
@@ -544,7 +368,6 @@ func TestAnnotationAPI_CreateWithBasicAuth(t *testing.T) {
 		t.Errorf("Expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Verify created_by contains the username
 	respBody := w.Body.String()
 	if !strings.Contains(respBody, "testadmin") {
 		t.Errorf("Expected response to contain 'testadmin' as created_by, got %s", respBody)
@@ -552,19 +375,7 @@ func TestAnnotationAPI_CreateWithBasicAuth(t *testing.T) {
 }
 
 func TestAnnotationAPI_GetNotFound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/annotations/999999", nil)
 	w := httptest.NewRecorder()
@@ -577,19 +388,7 @@ func TestAnnotationAPI_GetNotFound(t *testing.T) {
 }
 
 func TestAnnotationAPI_InvalidJSON(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/annotations", strings.NewReader("not json"))
 	w := httptest.NewRecorder()
@@ -602,19 +401,7 @@ func TestAnnotationAPI_InvalidJSON(t *testing.T) {
 }
 
 func TestAnnotationAPI_EmptyContent(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/annotations",
 		strings.NewReader(`{"change_id":1,"content":""}`))
@@ -628,19 +415,7 @@ func TestAnnotationAPI_EmptyContent(t *testing.T) {
 }
 
 func TestAnnotationAPI_MissingChangeID(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/annotations",
 		strings.NewReader(`{"content":"no change id"}`))
@@ -654,32 +429,18 @@ func TestAnnotationAPI_MissingChangeID(t *testing.T) {
 }
 
 func TestAnnotationAPI_Update(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
+	ctx, store, server := setupTest(t)
 
 	cleanupAnnotationTestData(t, store, ctx)
 	changeID := createTestChange(t, store, ctx)
 
-	// Create an annotation first
 	ann, err := store.CreateAnnotation(ctx, changeID, "Original content", "user1")
 	if err != nil {
 		t.Fatalf("Failed to create annotation: %v", err)
 	}
 
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Update via API
 	body := strings.NewReader(`{"content":"Updated content"}`)
-	req := httptest.NewRequest(http.MethodPut, "/api/annotations/"+itoa(ann.ID), body)
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/annotations/%d", ann.ID), body)
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("user2", "password")
 	w := httptest.NewRecorder()
@@ -690,7 +451,6 @@ func TestAnnotationAPI_Update(t *testing.T) {
 		t.Errorf("Expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Verify response contains updated content and updated_by
 	respBody := w.Body.String()
 	if !strings.Contains(respBody, "Updated content") {
 		t.Errorf("Expected 'Updated content' in response, got %s", respBody)
@@ -701,31 +461,17 @@ func TestAnnotationAPI_Update(t *testing.T) {
 }
 
 func TestAnnotationAPI_Delete(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
+	ctx, store, server := setupTest(t)
 
 	cleanupAnnotationTestData(t, store, ctx)
 	changeID := createTestChange(t, store, ctx)
 
-	// Create an annotation first
 	ann, err := store.CreateAnnotation(ctx, changeID, "To be deleted", "user")
 	if err != nil {
 		t.Fatalf("Failed to create annotation: %v", err)
 	}
 
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Delete via API
-	req := httptest.NewRequest(http.MethodDelete, "/api/annotations/"+itoa(ann.ID), nil)
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/api/annotations/%d", ann.ID), nil)
 	w := httptest.NewRecorder()
 
 	server.Handler().ServeHTTP(w, req)
@@ -734,7 +480,6 @@ func TestAnnotationAPI_Delete(t *testing.T) {
 		t.Errorf("Expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Verify annotation is gone
 	deleted, _ := store.GetAnnotation(ctx, ann.ID)
 	if deleted != nil {
 		t.Error("Expected annotation to be deleted")
@@ -742,19 +487,7 @@ func TestAnnotationAPI_Delete(t *testing.T) {
 }
 
 func TestAnnotationAPI_InvalidID(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/annotations/notanumber", nil)
 	w := httptest.NewRecorder()
@@ -767,21 +500,8 @@ func TestAnnotationAPI_InvalidID(t *testing.T) {
 }
 
 func TestAnnotationAPI_MethodNotAllowed(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	_, _, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// GET on /api/annotations (collection) should not be allowed
 	req := httptest.NewRequest(http.MethodGet, "/api/annotations", nil)
 	w := httptest.NewRecorder()
 
@@ -792,36 +512,8 @@ func TestAnnotationAPI_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// itoa is a helper to convert int64 to string
-func itoa(i int64) string {
-	return fmt.Sprintf("%d", i)
-}
-
 func TestHandleAPIClusters(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	// Create server with clusters configured
-	clusters := []struct {
-		ID   string
-		Name string
-	}{
-		{ID: "prod", Name: "Production"},
-		{ID: "staging", Name: "Staging"},
-	}
-
-	// We need to import config, but since we're testing the web package
-	// we'll test that the endpoint returns an empty array when no clusters configured
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/clusters", nil)
 	w := httptest.NewRecorder()
@@ -837,32 +529,16 @@ func TestHandleAPIClusters(t *testing.T) {
 		t.Errorf("Expected application/json, got %s", contentType)
 	}
 
-	// Should return empty array when no clusters configured
 	body := w.Body.String()
 	if body != "[]\n" && body != "[]" {
-		// If not empty, at least verify it's valid JSON array
 		if body[0] != '[' {
 			t.Errorf("Expected JSON array, got %s", body)
 		}
 	}
-
-	_ = clusters // Suppress unused warning
 }
 
 func TestHandleAPIClustersMethodNotAllowed(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/clusters", nil)
 	w := httptest.NewRecorder()
@@ -875,19 +551,7 @@ func TestHandleAPIClustersMethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleCompare(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/compare", nil)
 	w := httptest.NewRecorder()
@@ -910,16 +574,8 @@ func TestHandleCompare(t *testing.T) {
 }
 
 func TestHandleAPICompare(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, store, server := setupTest(t)
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	// Create test data for two clusters
 	settings1 := []storage.Setting{
 		{Variable: "compare.test.shared", Value: "same", SettingType: "s", Description: "Shared setting"},
 		{Variable: "compare.test.different", Value: "value1", SettingType: "s", Description: "Different setting"},
@@ -933,11 +589,6 @@ func TestHandleAPICompare(t *testing.T) {
 		{Variable: "compare.test.only2", Value: "only-in-2", SettingType: "s", Description: "Only in cluster2"},
 	}
 	store.SaveSnapshot(ctx, "compare-cluster2", settings2, "v1.0")
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/compare?cluster1=compare-cluster1&cluster2=compare-cluster2", nil)
 	w := httptest.NewRecorder()
@@ -954,34 +605,19 @@ func TestHandleAPICompare(t *testing.T) {
 	}
 
 	body := w.Body.String()
-	// Should contain the different setting
 	if !strings.Contains(body, "compare.test.different") {
 		t.Error("Expected different setting in response")
 	}
-	// Should contain cluster1 only setting
 	if !strings.Contains(body, "compare.test.only1") {
 		t.Error("Expected cluster1-only setting in response")
 	}
-	// Should contain cluster2 only setting
 	if !strings.Contains(body, "compare.test.only2") {
 		t.Error("Expected cluster2-only setting in response")
 	}
 }
 
 func TestHandleAPICompareMissingParams(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t)
 
 	// Missing both params
 	req := httptest.NewRequest(http.MethodGet, "/api/compare", nil)
@@ -1009,16 +645,8 @@ func TestHandleAPICompareMissingParams(t *testing.T) {
 }
 
 func TestHandleIndexWithClusterParam(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, store, server := setupTest(t, WithDefaultClusterID("other-cluster"))
 
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	// Create test data for specific cluster
 	settings := []storage.Setting{
 		{Variable: "cluster.param.test", Value: "test-value", SettingType: "s", Description: "Test"},
 	}
@@ -1029,12 +657,6 @@ func TestHandleIndexWithClusterParam(t *testing.T) {
 	}
 	store.SaveSnapshot(ctx, "param-test-cluster", settings2, "v1.0")
 
-	server, err := New(store, WithDefaultClusterID("other-cluster"))
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
-
-	// Request with cluster param should show that cluster's data
 	req := httptest.NewRequest(http.MethodGet, "/?cluster=param-test-cluster", nil)
 	w := httptest.NewRecorder()
 	server.Handler().ServeHTTP(w, req)
@@ -1050,32 +672,17 @@ func TestHandleIndexWithClusterParam(t *testing.T) {
 }
 
 func TestHandleAPISnapshots(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
 	clusterID := "api-snapshots-test-" + time.Now().Format("20060102150405.000")
+	ctx, store, server := setupTest(t, WithDefaultClusterID(clusterID))
 
-	// Create some test snapshots
 	settings := []storage.Setting{
 		{Variable: "api.snapshot.test", Value: "v1", SettingType: "s", Description: "Test"},
 	}
 	for range 3 {
-		err = store.SaveSnapshot(ctx, clusterID, settings, "v1.0")
-		if err != nil {
+		if err := store.SaveSnapshot(ctx, clusterID, settings, "v1.0"); err != nil {
 			t.Fatalf("Failed to save snapshot: %v", err)
 		}
 		time.Sleep(10 * time.Millisecond)
-	}
-
-	server, err := New(store, WithDefaultClusterID(clusterID))
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
 	}
 
 	// Test without cluster param (uses default)
@@ -1137,18 +744,9 @@ func TestHandleAPISnapshots(t *testing.T) {
 }
 
 func TestHandleAPICompareSnapshots(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
 	clusterID := "compare-snapshots-test-" + time.Now().Format("20060102150405.000")
+	ctx, store, server := setupTest(t)
 
-	// Create first snapshot
 	settings1 := []storage.Setting{
 		{Variable: "compare.shared", Value: "same", SettingType: "s", Description: "Shared"},
 		{Variable: "compare.different", Value: "val1", SettingType: "s", Description: "Different"},
@@ -1156,7 +754,6 @@ func TestHandleAPICompareSnapshots(t *testing.T) {
 	}
 	store.SaveSnapshot(ctx, clusterID, settings1, "v1.0")
 
-	// Create second snapshot
 	settings2 := []storage.Setting{
 		{Variable: "compare.shared", Value: "same", SettingType: "s", Description: "Shared"},
 		{Variable: "compare.different", Value: "val2", SettingType: "s", Description: "Different"},
@@ -1165,18 +762,12 @@ func TestHandleAPICompareSnapshots(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	store.SaveSnapshot(ctx, clusterID, settings2, "v1.0")
 
-	// Get snapshot IDs
 	snapshots, err := store.ListSnapshots(ctx, clusterID, 2)
 	if err != nil || len(snapshots) < 2 {
 		t.Fatalf("Failed to get snapshot IDs: %v", err)
 	}
 	snapshot1ID := snapshots[1].ID // older
 	snapshot2ID := snapshots[0].ID // newer
-
-	server, err := New(store)
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
 
 	// Test valid comparison
 	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/compare-snapshots?snapshot1=%d&snapshot2=%d", snapshot1ID, snapshot2ID), nil)
@@ -1192,7 +783,6 @@ func TestHandleAPICompareSnapshots(t *testing.T) {
 		t.Fatalf("Failed to parse JSON: %v", err)
 	}
 
-	// Should have one different, one before-only, one after-only
 	if len(result.Different) != 1 {
 		t.Errorf("Expected 1 different, got %d", len(result.Different))
 	}
@@ -1245,24 +835,12 @@ func TestHandleAPICompareSnapshots(t *testing.T) {
 }
 
 func TestHandleHistory(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
 	clusters := []config.ClusterConfig{
 		{ID: "prod", Name: "Production", DatabaseURL: "postgresql://prod"},
 		{ID: "staging", Name: "Staging", DatabaseURL: "postgresql://staging"},
 	}
 
-	server, err := New(store, WithClusters(clusters), WithDefaultClusterID("prod"))
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t, WithClusters(clusters), WithDefaultClusterID("prod"))
 
 	req := httptest.NewRequest(http.MethodGet, "/history", nil)
 	w := httptest.NewRecorder()
@@ -1279,52 +857,25 @@ func TestHandleHistory(t *testing.T) {
 }
 
 func TestWithRedactor(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
 	redactor := storage.NewRedactor(storage.RedactorConfig{
 		Enabled: true,
 	})
 
-	server, err := New(store, WithRedactor(redactor))
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t, WithRedactor(redactor))
 
-	// Just verify the server was created with the redactor
-	// The redactor functionality is tested in storage/redact_test.go
 	if server == nil {
 		t.Fatal("Expected non-nil server")
 	}
 }
 
 func TestWithClusters(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, getTestDB(t))
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
 	clusters := []config.ClusterConfig{
 		{ID: "prod", Name: "Production", DatabaseURL: "postgresql://prod"},
 		{ID: "staging", Name: "Staging", DatabaseURL: "postgresql://staging"},
 	}
 
-	server, err := New(store, WithClusters(clusters))
-	if err != nil {
-		t.Fatalf("Failed to create web server: %v", err)
-	}
+	_, _, server := setupTest(t, WithClusters(clusters))
 
-	// Verify clusters are returned by API
 	req := httptest.NewRequest(http.MethodGet, "/api/clusters", nil)
 	w := httptest.NewRecorder()
 	server.Handler().ServeHTTP(w, req)
