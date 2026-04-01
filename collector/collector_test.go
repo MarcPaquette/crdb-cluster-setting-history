@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// uniqueClusterID returns a unique cluster ID for the given test.
 func uniqueClusterID(t *testing.T) string {
 	t.Helper()
 	return fmt.Sprintf("coll-%s-%d", t.Name(), time.Now().UnixNano())
@@ -63,7 +62,6 @@ func TestShowClusterSettingsColumns(t *testing.T) {
 	}
 	defer rows.Close()
 
-	// Check column names
 	fieldDescs := rows.FieldDescriptions()
 	t.Logf("SHOW CLUSTER SETTINGS returns %d columns:", len(fieldDescs))
 	for i, fd := range fieldDescs {
@@ -81,7 +79,6 @@ func TestShowClusterSettingsColumns(t *testing.T) {
 		}
 	}
 
-	// Test scanning a row
 	if rows.Next() {
 		var variable, value, settingType, description, defaultValue, origin string
 		err := rows.Scan(&variable, &value, &settingType, &description, &defaultValue, &origin)
@@ -101,59 +98,45 @@ func getTestURLs(t *testing.T) (string, string) {
 	return sourceURL, historyURL
 }
 
-func TestNew(t *testing.T) {
+func setupCollectorTest(t *testing.T, timeout, interval time.Duration) (context.Context, *storage.Store, *Collector, string) {
+	t.Helper()
 	sourceURL, historyURL := getTestURLs(t)
 	clusterID := uniqueClusterID(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	t.Cleanup(cancel)
 
 	store, err := storage.New(ctx, historyURL)
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { store.Close() })
 
-	coll, err := New(ctx, clusterID, sourceURL, store, 15*time.Minute)
+	coll, err := New(ctx, clusterID, sourceURL, store, interval)
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}
-	defer coll.Close()
+	t.Cleanup(func() { coll.Close() })
 
-	if coll == nil {
-		t.Fatal("Expected non-nil collector")
-	}
+	return ctx, store, coll, clusterID
+}
+
+func TestNew(t *testing.T) {
+	_, _, coll, _ := setupCollectorTest(t, 10*time.Second, 15*time.Minute)
+
 	if coll.interval != 15*time.Minute {
 		t.Error("Interval not set correctly")
 	}
 }
 
 func TestCollect(t *testing.T) {
-	sourceURL, historyURL := getTestURLs(t)
-	clusterID := uniqueClusterID(t)
+	ctx, store, coll, clusterID := setupCollectorTest(t, 30*time.Second, 15*time.Minute)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, historyURL)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	coll, err := New(ctx, clusterID, sourceURL, store, 15*time.Minute)
-	if err != nil {
-		t.Fatalf("Failed to create collector: %v", err)
-	}
-	defer coll.Close()
-
-	// Call collect directly
-	err = coll.collect(ctx)
+	err := coll.collect(ctx)
 	if err != nil {
 		t.Fatalf("collect() failed: %v", err)
 	}
 
-	// Verify data was stored
 	snapshot, err := store.GetLatestSnapshot(ctx, clusterID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
@@ -167,38 +150,21 @@ func TestCollect(t *testing.T) {
 }
 
 func TestStart(t *testing.T) {
-	sourceURL, historyURL := getTestURLs(t)
-	clusterID := uniqueClusterID(t)
+	ctx, store, coll, clusterID := setupCollectorTest(t, 5*time.Second, 1*time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, historyURL)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	// Use a short interval
-	coll, err := New(ctx, clusterID, sourceURL, store, 1*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to create collector: %v", err)
-	}
-	defer coll.Close()
-
-	// Start in a goroutine
 	done := make(chan struct{})
 	go func() {
 		coll.Start(ctx)
 		close(done)
 	}()
-
-	// Wait for context to timeout
 	<-done
 
-	// Verify data was collected
-	snapshot, err := store.GetLatestSnapshot(ctx, clusterID)
-	if err != nil && ctx.Err() == nil {
+	// Use a fresh context since the original expired after the goroutine finished
+	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer verifyCancel()
+
+	snapshot, err := store.GetLatestSnapshot(verifyCtx, clusterID)
+	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
 	}
 
@@ -212,15 +178,14 @@ func TestNewWithInvalidURL(t *testing.T) {
 	clusterID := uniqueClusterID(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	store, err := storage.New(ctx, historyURL)
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { store.Close() })
 
-	// Use invalid source URL - should fail at pool creation
 	_, err = New(ctx, clusterID, "postgresql://invalid:5432/db?connect_timeout=1", store, 15*time.Minute)
 	if err == nil {
 		t.Error("Expected error with invalid URL")
@@ -228,25 +193,8 @@ func TestNewWithInvalidURL(t *testing.T) {
 }
 
 func TestWithRetention(t *testing.T) {
-	sourceURL, historyURL := getTestURLs(t)
-	clusterID := uniqueClusterID(t)
+	_, _, coll, _ := setupCollectorTest(t, 10*time.Second, 15*time.Minute)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, historyURL)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	coll, err := New(ctx, clusterID, sourceURL, store, 15*time.Minute)
-	if err != nil {
-		t.Fatalf("Failed to create collector: %v", err)
-	}
-	defer coll.Close()
-
-	// Test chaining
 	result := coll.WithRetention(24 * time.Hour)
 	if result != coll {
 		t.Error("WithRetention should return the same collector for chaining")
@@ -258,72 +206,31 @@ func TestWithRetention(t *testing.T) {
 }
 
 func TestCollectAndCleanup(t *testing.T) {
-	sourceURL, historyURL := getTestURLs(t)
-	clusterID := uniqueClusterID(t)
+	ctx, store, coll, clusterID := setupCollectorTest(t, 30*time.Second, 15*time.Minute)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, historyURL)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	coll, err := New(ctx, clusterID, sourceURL, store, 15*time.Minute)
-	if err != nil {
-		t.Fatalf("Failed to create collector: %v", err)
-	}
-	defer coll.Close()
-
-	// Set a very short retention to trigger cleanup
+	// Short retention to trigger cleanup path
 	coll.WithRetention(1 * time.Nanosecond)
-
-	// Run collectAndCleanup - this exercises both collect and cleanup paths
 	coll.collectAndCleanup(ctx)
 
-	// Verify collection happened (cleanup may have removed old data)
 	snapshot, err := store.GetLatestSnapshot(ctx, clusterID)
 	if err != nil {
 		t.Fatalf("Failed to get snapshot: %v", err)
 	}
 
-	// May or may not have data depending on timing, but shouldn't error
 	t.Logf("After collectAndCleanup: %d settings in snapshot", len(snapshot))
 }
 
 func TestCleanupWithRetention(t *testing.T) {
-	sourceURL, historyURL := getTestURLs(t)
-	clusterID := uniqueClusterID(t)
+	ctx, _, coll, _ := setupCollectorTest(t, 30*time.Second, 15*time.Minute)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, historyURL)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	coll, err := New(ctx, clusterID, sourceURL, store, 15*time.Minute)
-	if err != nil {
-		t.Fatalf("Failed to create collector: %v", err)
-	}
-	defer coll.Close()
-
-	// First collect some data
-	err = coll.collect(ctx)
+	err := coll.collect(ctx)
 	if err != nil {
 		t.Fatalf("collect() failed: %v", err)
 	}
 
-	// Set retention and run cleanup
 	coll.WithRetention(1 * time.Nanosecond)
 	err = coll.cleanup(ctx)
 	if err != nil {
 		t.Fatalf("cleanup() failed: %v", err)
 	}
-
-	// Cleanup should have run without error
-	t.Log("Cleanup completed successfully")
 }
