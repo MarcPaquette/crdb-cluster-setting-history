@@ -348,8 +348,8 @@ func TestRateLimiter_Cleanup(t *testing.T) {
 
 	rl.cleanupVisitors()
 
-	rl.mu.RLock()
-	defer rl.mu.RUnlock()
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
 
 	if len(rl.visitors) != 1 {
 		t.Errorf("Expected 1 visitor after cleanup, got %d", len(rl.visitors))
