@@ -16,7 +16,6 @@ import (
 // contextKey is an unexported type for context keys in this package.
 type contextKey string
 
-// nonceKey is the context key for the CSP nonce.
 const nonceKey contextKey = "cspNonce"
 
 // GetNonce returns the CSP nonce from the request context.
@@ -27,14 +26,12 @@ func GetNonce(ctx context.Context) string {
 	return ""
 }
 
-// generateNonce creates a cryptographically random base64-encoded nonce.
 func generateNonce() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return base64.StdEncoding.EncodeToString(b)
 }
 
-// SecurityHeaders returns middleware that adds security headers to responses.
 func SecurityHeaders(tlsEnabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -63,23 +60,17 @@ func SecurityHeaders(tlsEnabled bool) func(http.Handler) http.Handler {
 	}
 }
 
-// RateLimiterConfig holds rate limiting configuration.
 type RateLimiterConfig struct {
-	// RequestsPerSecond is the rate limit per IP.
 	RequestsPerSecond float64
-	// Burst is the maximum burst size.
-	Burst int
-	// Enabled controls whether rate limiting is active.
-	Enabled bool
+	Burst             int
+	Enabled           bool
 	// TrustProxy controls whether X-Forwarded-For/X-Real-IP headers are trusted.
-	// When false, only r.RemoteAddr is used for client IP detection.
 	TrustProxy bool
 }
 
-// RateLimiter provides per-IP rate limiting.
 type RateLimiter struct {
 	visitors   map[string]*visitorInfo
-	mu         sync.RWMutex
+	mu         sync.Mutex
 	rate       rate.Limit
 	burst      int
 	enabled    bool
@@ -91,7 +82,6 @@ type visitorInfo struct {
 	lastSeen time.Time
 }
 
-// NewRateLimiter creates a new rate limiter.
 func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
 	return &RateLimiter{
 		visitors:   make(map[string]*visitorInfo),
@@ -102,7 +92,6 @@ func NewRateLimiter(cfg RateLimiterConfig) *RateLimiter {
 	}
 }
 
-// getLimiter returns the rate limiter for the given IP.
 func (rl *RateLimiter) getLimiter(ip string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -118,8 +107,7 @@ func (rl *RateLimiter) getLimiter(ip string) *rate.Limiter {
 	return v.limiter
 }
 
-// StartCleanup spawns a goroutine that periodically evicts stale visitor entries.
-// It stops when the context is cancelled.
+// StartCleanup evicts stale visitors every minute until ctx is cancelled.
 func (rl *RateLimiter) StartCleanup(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
@@ -135,7 +123,6 @@ func (rl *RateLimiter) StartCleanup(ctx context.Context) {
 	}()
 }
 
-// cleanupVisitors evicts visitor entries not seen in the last 5 minutes.
 func (rl *RateLimiter) cleanupVisitors() {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -147,7 +134,6 @@ func (rl *RateLimiter) cleanupVisitors() {
 	}
 }
 
-// Middleware returns HTTP middleware that enforces rate limiting.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !rl.enabled {
@@ -166,9 +152,6 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// getClientIP extracts the client IP from the request.
-// When trustProxy is true, X-Forwarded-For and X-Real-IP headers are checked.
-// When false, only r.RemoteAddr is used.
 func getClientIP(r *http.Request, trustProxy bool) string {
 	if trustProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
@@ -189,7 +172,6 @@ func getClientIP(r *http.Request, trustProxy bool) string {
 	return ip
 }
 
-// ChainMiddleware chains multiple middleware together.
 func ChainMiddleware(h http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
 	for i := len(middlewares) - 1; i >= 0; i-- {
 		h = middlewares[i](h)
