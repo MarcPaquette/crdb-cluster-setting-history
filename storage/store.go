@@ -416,7 +416,8 @@ func (s *Store) CleanupOldChanges(ctx context.Context, clusterID string, retenti
 func (s *Store) SetMetadata(ctx context.Context, clusterID, key, value string) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO metadata (cluster_id, key, value, updated_at) VALUES ($1, $2, $3, NOW())
-		 ON CONFLICT (cluster_id, key) DO UPDATE SET value = $3, updated_at = NOW()`,
+		 ON CONFLICT (cluster_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+		 WHERE metadata.value IS DISTINCT FROM EXCLUDED.value`,
 		clusterID, key, value,
 	)
 	return err

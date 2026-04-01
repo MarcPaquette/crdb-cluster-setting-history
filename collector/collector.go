@@ -117,11 +117,9 @@ func (c *Collector) cleanup(ctx context.Context) error {
 func (c *Collector) collect(ctx context.Context) error {
 	slog.Info("Collecting cluster settings", "cluster", c.clusterID)
 
-	// Fetch and store source cluster ID and version (only updates if changed)
 	if err := c.updateSourceClusterID(ctx); err != nil {
 		slog.Warn("Failed to update source cluster ID", "cluster", c.clusterID, "error", err)
 	}
-	// Fetch version once and use for both full version storage and short version extraction
 	fullVersion, err := c.fetchVersion(ctx)
 	if err != nil {
 		slog.Warn("Failed to fetch database version", "cluster", c.clusterID, "error", err)
