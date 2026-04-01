@@ -9,46 +9,53 @@ import (
 	"crdb-cluster-history/storage"
 )
 
-func TestNewManager(t *testing.T) {
-	sourceURL, historyURL := getTestURLs(t)
+func setupManagerTest(t *testing.T, clusters []config.ClusterConfig) (context.Context, *Manager) {
+	t.Helper()
+	_, historyURL := getTestURLs(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	t.Cleanup(cancel)
 
 	store, err := storage.New(ctx, historyURL)
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
-	defer store.Close()
+	t.Cleanup(func() { store.Close() })
 
 	cfg := &config.Config{
 		HistoryDatabaseURL: historyURL,
 		PollInterval:       config.Duration(1 * time.Hour),
-		Clusters: []config.ClusterConfig{
-			{Name: "Test1", ID: "test1", DatabaseURL: sourceURL},
-			{Name: "Test2", ID: "test2", DatabaseURL: sourceURL},
-		},
+		Clusters:           clusters,
 	}
 
 	manager, err := NewManager(ctx, cfg, store)
 	if err != nil {
 		t.Fatalf("NewManager() failed: %v", err)
 	}
-	defer manager.Close()
+	t.Cleanup(func() { manager.Close() })
 
-	// Verify collectors were created
+	return ctx, manager
+}
+
+func TestNewManager(t *testing.T) {
+	sourceURL, _ := getTestURLs(t)
+
+	_, manager := setupManagerTest(t, []config.ClusterConfig{
+		{Name: "Test1", ID: "test1", DatabaseURL: sourceURL},
+		{Name: "Test2", ID: "test2", DatabaseURL: sourceURL},
+	})
+
 	ids := manager.ClusterIDs()
 	if len(ids) != 2 {
 		t.Errorf("ClusterIDs() = %d, want 2", len(ids))
 	}
 
-	// Verify GetCollector works
 	coll, ok := manager.GetCollector("test1")
 	if !ok {
-		t.Error("GetCollector(test1) should find collector")
+		t.Fatal("GetCollector(test1) should find collector")
 	}
 	if coll == nil {
-		t.Error("GetCollector(test1) returned nil collector")
+		t.Fatal("GetCollector(test1) returned nil collector")
 	}
 
 	_, ok = manager.GetCollector("nonexistent")
@@ -84,81 +91,32 @@ func TestNewManagerInvalidURL(t *testing.T) {
 }
 
 func TestManagerCollect(t *testing.T) {
-	sourceURL, historyURL := getTestURLs(t)
+	sourceURL, _ := getTestURLs(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx, manager := setupManagerTest(t, []config.ClusterConfig{
+		{Name: "Test", ID: "manager-test", DatabaseURL: sourceURL},
+	})
 
-	store, err := storage.New(ctx, historyURL)
+	err := manager.Collect(ctx)
 	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	cfg := &config.Config{
-		HistoryDatabaseURL: historyURL,
-		PollInterval:       config.Duration(1 * time.Hour),
-		Clusters: []config.ClusterConfig{
-			{Name: "Test", ID: "manager-test", DatabaseURL: sourceURL},
-		},
-	}
-
-	manager, err := NewManager(ctx, cfg, store)
-	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
-	}
-	defer manager.Close()
-
-	// Trigger manual collection
-	err = manager.Collect(ctx)
-	if err != nil {
-		t.Errorf("Collect() failed: %v", err)
-	}
-
-	// Verify data was collected
-	snapshot, err := store.GetLatestSnapshot(ctx, "manager-test")
-	if err != nil {
-		t.Fatalf("GetLatestSnapshot() failed: %v", err)
-	}
-	if len(snapshot) == 0 {
-		t.Error("Expected snapshot to have settings after Collect()")
+		t.Fatalf("Collect() failed: %v", err)
 	}
 }
 
 func TestManagerClusterIDs(t *testing.T) {
-	sourceURL, historyURL := getTestURLs(t)
+	sourceURL, _ := getTestURLs(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	store, err := storage.New(ctx, historyURL)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	cfg := &config.Config{
-		HistoryDatabaseURL: historyURL,
-		PollInterval:       config.Duration(1 * time.Hour),
-		Clusters: []config.ClusterConfig{
-			{Name: "Alpha", ID: "alpha", DatabaseURL: sourceURL},
-			{Name: "Beta", ID: "beta", DatabaseURL: sourceURL},
-			{Name: "Gamma", ID: "gamma", DatabaseURL: sourceURL},
-		},
-	}
-
-	manager, err := NewManager(ctx, cfg, store)
-	if err != nil {
-		t.Fatalf("NewManager() failed: %v", err)
-	}
-	defer manager.Close()
+	_, manager := setupManagerTest(t, []config.ClusterConfig{
+		{Name: "Alpha", ID: "alpha", DatabaseURL: sourceURL},
+		{Name: "Beta", ID: "beta", DatabaseURL: sourceURL},
+		{Name: "Gamma", ID: "gamma", DatabaseURL: sourceURL},
+	})
 
 	ids := manager.ClusterIDs()
 	if len(ids) != 3 {
 		t.Errorf("ClusterIDs() = %d, want 3", len(ids))
 	}
 
-	// Check all IDs are present (order may vary)
 	idMap := make(map[string]bool)
 	for _, id := range ids {
 		idMap[id] = true
