@@ -3,7 +3,6 @@ package storage
 import (
 	"regexp"
 	"testing"
-	"time"
 )
 
 func TestRedactor_Disabled(t *testing.T) {
@@ -97,13 +96,11 @@ func TestRedactor_RedactValue(t *testing.T) {
 	t.Parallel()
 	r := NewRedactor(RedactorConfig{Enabled: true})
 
-	// Sensitive value
 	value := r.RedactValue("server.password", "secret123")
 	if value != RedactedPlaceholder {
 		t.Errorf("expected [REDACTED], got %q", value)
 	}
 
-	// Non-sensitive value
 	value = r.RedactValue("server.host", "localhost")
 	if value != "localhost" {
 		t.Errorf("expected original value, got %q", value)
@@ -114,16 +111,11 @@ func TestRedactor_RedactChange(t *testing.T) {
 	t.Parallel()
 	r := NewRedactor(RedactorConfig{Enabled: true})
 
-	now := time.Now()
-
-	// Sensitive change
 	c := Change{
-		DetectedAt:  now,
 		Variable:    "server.password",
 		OldValue:    "old_secret",
 		NewValue:    "new_secret",
 		Description: "Password setting",
-		Version:     "v24.1.0",
 	}
 
 	redacted := r.RedactChange(c)
@@ -137,14 +129,10 @@ func TestRedactor_RedactChange(t *testing.T) {
 		t.Error("description should not be redacted")
 	}
 
-	// Non-sensitive change
 	c2 := Change{
-		DetectedAt:  now,
 		Variable:    "server.host",
 		OldValue:    "old.host.com",
 		NewValue:    "new.host.com",
-		Description: "Host setting",
-		Version:     "v24.1.0",
 	}
 
 	redacted2 := r.RedactChange(c2)
@@ -157,11 +145,10 @@ func TestRedactor_RedactChanges(t *testing.T) {
 	t.Parallel()
 	r := NewRedactor(RedactorConfig{Enabled: true})
 
-	now := time.Now()
 	changes := []Change{
-		{DetectedAt: now, Variable: "server.password", OldValue: "secret1", NewValue: "secret2"},
-		{DetectedAt: now, Variable: "server.host", OldValue: "host1", NewValue: "host2"},
-		{DetectedAt: now, Variable: "api.token", OldValue: "token1", NewValue: "token2"},
+		{Variable: "server.password", OldValue: "secret1", NewValue: "secret2"},
+		{Variable: "server.host", OldValue: "host1", NewValue: "host2"},
+		{Variable: "api.token", OldValue: "token1", NewValue: "token2"},
 	}
 
 	redacted := r.RedactChanges(changes)
@@ -170,22 +157,18 @@ func TestRedactor_RedactChanges(t *testing.T) {
 		t.Fatalf("expected 3 changes, got %d", len(redacted))
 	}
 
-	// First should be redacted
 	if redacted[0].OldValue != RedactedPlaceholder {
 		t.Errorf("expected redacted, got %q", redacted[0].OldValue)
 	}
 
-	// Second should NOT be redacted
 	if redacted[1].OldValue != "host1" {
 		t.Errorf("expected original value, got %q", redacted[1].OldValue)
 	}
 
-	// Third should be redacted
 	if redacted[2].OldValue != RedactedPlaceholder {
 		t.Errorf("expected redacted, got %q", redacted[2].OldValue)
 	}
 
-	// Original should be unchanged
 	if changes[0].OldValue != "secret1" {
 		t.Error("original changes should not be modified")
 	}
