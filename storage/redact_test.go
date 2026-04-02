@@ -99,7 +99,7 @@ func TestRedactor_RedactValue(t *testing.T) {
 
 	// Sensitive value
 	value := r.RedactValue("server.password", "secret123")
-	if value != "[REDACTED]" {
+	if value != RedactedPlaceholder {
 		t.Errorf("expected [REDACTED], got %q", value)
 	}
 
@@ -127,7 +127,7 @@ func TestRedactor_RedactChange(t *testing.T) {
 	}
 
 	redacted := r.RedactChange(c)
-	if redacted.OldValue != "[REDACTED]" || redacted.NewValue != "[REDACTED]" {
+	if redacted.OldValue != RedactedPlaceholder || redacted.NewValue != RedactedPlaceholder {
 		t.Errorf("expected redacted values, got old=%q new=%q", redacted.OldValue, redacted.NewValue)
 	}
 	if redacted.Variable != "server.password" {
@@ -171,7 +171,7 @@ func TestRedactor_RedactChanges(t *testing.T) {
 	}
 
 	// First should be redacted
-	if redacted[0].OldValue != "[REDACTED]" {
+	if redacted[0].OldValue != RedactedPlaceholder {
 		t.Errorf("expected redacted, got %q", redacted[0].OldValue)
 	}
 
@@ -181,7 +181,7 @@ func TestRedactor_RedactChanges(t *testing.T) {
 	}
 
 	// Third should be redacted
-	if redacted[2].OldValue != "[REDACTED]" {
+	if redacted[2].OldValue != RedactedPlaceholder {
 		t.Errorf("expected redacted, got %q", redacted[2].OldValue)
 	}
 
