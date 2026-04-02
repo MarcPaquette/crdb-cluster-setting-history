@@ -106,7 +106,6 @@ var migrations = []migration{
 // The schema_migrations table must already exist (created by initAndMigrate).
 // All migrations are idempotent, so concurrent execution is safe.
 func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
-	// Get the current version
 	currentVersion := 0
 	err := pool.QueryRow(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&currentVersion)
 	if err != nil {
@@ -118,7 +117,6 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		return nil
 	}
 
-	// Run pending migrations
 	for _, m := range migrations {
 		if m.version <= currentVersion {
 			continue
@@ -126,7 +124,6 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 
 		slog.Info("Running migration", "version", m.version, "description", m.description)
 
-		// Migration 5 needs special handling (metadata PK change)
 		if m.version == 5 {
 			if err := migrateMetadataPK(ctx, pool); err != nil {
 				return fmt.Errorf("migration %d (%s): %w", m.version, m.description, err)
@@ -137,7 +134,6 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 			}
 		}
 
-		// Record the migration
 		_, err := pool.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", m.version)
 		if err != nil {
 			return fmt.Errorf("recording migration %d: %w", m.version, err)
@@ -165,14 +161,13 @@ func migrateMetadataPK(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	if !pkIncludesClusterID {
-		_, err = pool.Exec(ctx, "ALTER TABLE metadata DROP CONSTRAINT metadata_pkey, ADD PRIMARY KEY (cluster_id, key)")
-		if err != nil {
-			// Ignore if another replica already migrated
-			if !isConstraintAlreadyExists(err) {
-				return err
-			}
-		}
+	if pkIncludesClusterID {
+		return nil
+	}
+
+	_, err = pool.Exec(ctx, "ALTER TABLE metadata DROP CONSTRAINT metadata_pkey, ADD PRIMARY KEY (cluster_id, key)")
+	if err != nil && !isConstraintAlreadyExists(err) {
+		return err
 	}
 
 	return nil
@@ -181,7 +176,6 @@ func migrateMetadataPK(ctx context.Context, pool *pgxpool.Pool) error {
 // initAndMigrate creates the migration tracking table, handles existing databases,
 // then runs any pending migrations.
 func initAndMigrate(ctx context.Context, pool *pgxpool.Pool) error {
-	// Create the version tracking table first
 	_, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INT NOT NULL,
@@ -192,7 +186,6 @@ func initAndMigrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("creating schema_migrations table: %w", err)
 	}
 
-	// Handle databases created before the migration system
 	if err := migrateExistingDB(ctx, pool); err != nil {
 		return err
 	}
@@ -204,7 +197,6 @@ func initAndMigrate(ctx context.Context, pool *pgxpool.Pool) error {
 // and records all migrations as applied so they aren't re-run.
 // This is needed because existing databases already have the full schema but no schema_migrations records.
 func migrateExistingDB(ctx context.Context, pool *pgxpool.Pool) error {
-	// Check if schema_migrations is empty (new migration system) but tables already exist
 	var migrationCount int
 	err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount)
 	if err != nil {
@@ -215,7 +207,6 @@ func migrateExistingDB(ctx context.Context, pool *pgxpool.Pool) error {
 		return nil // Already has migration history
 	}
 
-	// Check if the database has existing tables (pre-migration system)
 	var hasSnapshots bool
 	err = pool.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -231,7 +222,6 @@ func migrateExistingDB(ctx context.Context, pool *pgxpool.Pool) error {
 		return nil // Fresh database, migrations will run normally
 	}
 
-	// Existing database — mark all migrations as applied
 	slog.Info("Detected existing database, recording migration history")
 	for _, m := range migrations {
 		_, err := pool.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", m.version)
