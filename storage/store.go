@@ -28,7 +28,6 @@ type Change struct {
 	Version     string
 }
 
-// Annotation represents a user comment on a specific change.
 type Annotation struct {
 	ID        int64
 	ChangeID  int64
@@ -57,7 +56,6 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-// derefString returns the dereferenced value, or empty string if nil.
 func derefString(s *string) string {
 	if s != nil {
 		return *s
@@ -65,12 +63,10 @@ func derefString(s *string) string {
 	return ""
 }
 
-// changeNullableFields holds nullable columns from the changes table for scanning.
 type changeNullableFields struct {
 	OldValue, NewValue, Description, Version *string
 }
 
-// applyTo copies the non-nil values to the target Change.
 func (f *changeNullableFields) applyTo(c *Change) {
 	c.OldValue = derefString(f.OldValue)
 	c.NewValue = derefString(f.NewValue)
@@ -78,13 +74,11 @@ func (f *changeNullableFields) applyTo(c *Change) {
 	c.Version = derefString(f.Version)
 }
 
-// annotationNullableFields holds nullable update columns from the annotations table.
 type annotationNullableFields struct {
 	UpdatedBy *string
 	UpdatedAt *time.Time
 }
 
-// applyTo copies the non-nil values to the target Annotation.
 func (f *annotationNullableFields) applyTo(a *Annotation) {
 	a.UpdatedBy = derefString(f.UpdatedBy)
 	if f.UpdatedAt != nil {
@@ -92,7 +86,6 @@ func (f *annotationNullableFields) applyTo(a *Annotation) {
 	}
 }
 
-// querier is an interface that both pgxpool.Pool and pgx.Tx implement.
 type querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -200,10 +193,9 @@ func (s *Store) ListSnapshots(ctx context.Context, clusterID string, limit int) 
 // Returns nil, nil if the snapshot does not exist.
 func (s *Store) GetSnapshotByID(ctx context.Context, snapshotID int64) (map[string]Setting, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT s.variable, s.value, s.setting_type, s.description
-		 FROM settings s
-		 JOIN snapshots snap ON snap.id = s.snapshot_id
-		 WHERE s.snapshot_id = $1`,
+		`SELECT variable, value, setting_type, description
+		 FROM settings
+		 WHERE snapshot_id = $1`,
 		snapshotID,
 	)
 	if err != nil {
@@ -309,6 +301,17 @@ func (s *Store) SaveSnapshot(ctx context.Context, clusterID string, settings []S
 	return tx.Commit(ctx)
 }
 
+// scanChange scans a single row from a changes query into a Change.
+func scanChange(rows pgx.Rows) (Change, error) {
+	var c Change
+	var nf changeNullableFields
+	if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &nf.OldValue, &nf.NewValue, &nf.Description, &nf.Version); err != nil {
+		return Change{}, err
+	}
+	nf.applyTo(&c)
+	return c, nil
+}
+
 func (s *Store) GetChanges(ctx context.Context, clusterID string, limit int) ([]Change, error) {
 	rows, err := s.pool.Query(ctx,
 		"SELECT cluster_id, detected_at, variable, old_value, new_value, description, version FROM changes WHERE cluster_id = $1 ORDER BY detected_at DESC LIMIT $2",
@@ -321,12 +324,10 @@ func (s *Store) GetChanges(ctx context.Context, clusterID string, limit int) ([]
 
 	var changes []Change
 	for rows.Next() {
-		var c Change
-		var nf changeNullableFields
-		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &nf.OldValue, &nf.NewValue, &nf.Description, &nf.Version); err != nil {
+		c, err := scanChange(rows)
+		if err != nil {
 			return nil, err
 		}
-		nf.applyTo(&c)
 		changes = append(changes, c)
 	}
 
@@ -346,12 +347,10 @@ func (s *Store) StreamChanges(ctx context.Context, clusterID string, fn func(Cha
 	defer rows.Close()
 
 	for rows.Next() {
-		var c Change
-		var nf changeNullableFields
-		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &nf.OldValue, &nf.NewValue, &nf.Description, &nf.Version); err != nil {
+		c, err := scanChange(rows)
+		if err != nil {
 			return err
 		}
-		nf.applyTo(&c)
 		if err := fn(c); err != nil {
 			return err
 		}
@@ -373,12 +372,10 @@ func (s *Store) GetAllChanges(ctx context.Context, limit int) ([]Change, error) 
 
 	var changes []Change
 	for rows.Next() {
-		var c Change
-		var nf changeNullableFields
-		if err := rows.Scan(&c.ClusterID, &c.DetectedAt, &c.Variable, &nf.OldValue, &nf.NewValue, &nf.Description, &nf.Version); err != nil {
+		c, err := scanChange(rows)
+		if err != nil {
 			return nil, err
 		}
-		nf.applyTo(&c)
 		changes = append(changes, c)
 	}
 
@@ -459,7 +456,7 @@ func (s *Store) SetDatabaseVersion(ctx context.Context, clusterID, version strin
 // ListClusters returns all distinct cluster IDs that have data.
 func (s *Store) ListClusters(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT DISTINCT cluster_id FROM (
+		`SELECT cluster_id FROM (
 			SELECT cluster_id FROM snapshots
 			UNION
 			SELECT cluster_id FROM changes
@@ -523,35 +520,6 @@ func (cw *CSVChangeWriter) Error() error {
 	return cw.w.Error()
 }
 
-// WriteChangesCSV writes changes to a CSV format.
-// Uses each change's ClusterID field for the cluster_id column.
-func WriteChangesCSV(w io.Writer, changes []Change) error {
-	csvWriter := csv.NewWriter(w)
-	defer csvWriter.Flush()
-
-	header := []string{"cluster_id", "detected_at", "variable", "version", "old_value", "new_value", "description"}
-	if err := csvWriter.Write(header); err != nil {
-		return err
-	}
-
-	for _, c := range changes {
-		row := []string{
-			c.ClusterID,
-			c.DetectedAt.Format(time.RFC3339),
-			c.Variable,
-			c.Version,
-			c.OldValue,
-			c.NewValue,
-			c.Description,
-		}
-		if err := csvWriter.Write(row); err != nil {
-			return err
-		}
-	}
-
-	return csvWriter.Error()
-}
-
 // CreateAnnotation creates a new annotation for a change.
 // Returns the created annotation with its ID populated.
 func (s *Store) CreateAnnotation(ctx context.Context, changeID int64, content, createdBy string) (*Annotation, error) {
@@ -576,25 +544,6 @@ func (s *Store) GetAnnotation(ctx context.Context, id int64) (*Annotation, error
 		`SELECT id, change_id, content, created_by, created_at, updated_by, updated_at
 		 FROM annotations WHERE id = $1`,
 		id,
-	).Scan(&a.ID, &a.ChangeID, &a.Content, &a.CreatedBy, &a.CreatedAt, &nf.UpdatedBy, &nf.UpdatedAt)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	nf.applyTo(&a)
-	return &a, nil
-}
-
-// GetAnnotationByChangeID retrieves an annotation for a specific change.
-func (s *Store) GetAnnotationByChangeID(ctx context.Context, changeID int64) (*Annotation, error) {
-	var a Annotation
-	var nf annotationNullableFields
-	err := s.pool.QueryRow(ctx,
-		`SELECT id, change_id, content, created_by, created_at, updated_by, updated_at
-		 FROM annotations WHERE change_id = $1`,
-		changeID,
 	).Scan(&a.ID, &a.ChangeID, &a.Content, &a.CreatedBy, &a.CreatedAt, &nf.UpdatedBy, &nf.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -691,7 +640,3 @@ func (s *Store) GetChangesWithAnnotations(ctx context.Context, clusterID string,
 	return results, rows.Err()
 }
 
-// GetLatestSettings retrieves the current settings for a cluster (for comparison).
-func (s *Store) GetLatestSettings(ctx context.Context, clusterID string) (map[string]Setting, error) {
-	return s.GetLatestSnapshot(ctx, clusterID)
-}

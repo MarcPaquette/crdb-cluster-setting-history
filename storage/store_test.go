@@ -1,9 +1,7 @@
 package storage
 
 import (
-	"bytes"
 	"context"
-	"encoding/csv"
 	"fmt"
 	"os"
 	"strings"
@@ -562,14 +560,6 @@ func TestAnnotationCRUD(t *testing.T) {
 		t.Errorf("Expected content 'Test note', got '%s'", retrieved.Content)
 	}
 
-	byChange, err := store.GetAnnotationByChangeID(ctx, changeID)
-	if err != nil {
-		t.Fatalf("GetAnnotationByChangeID failed: %v", err)
-	}
-	if byChange == nil || byChange.ID != ann.ID {
-		t.Error("GetAnnotationByChangeID returned wrong annotation")
-	}
-
 	err = store.UpdateAnnotation(ctx, ann.ID, "Updated note", "otheruser")
 	if err != nil {
 		t.Fatalf("UpdateAnnotation failed: %v", err)
@@ -917,118 +907,3 @@ func TestGetAllChanges(t *testing.T) {
 	}
 }
 
-func TestWriteChangesCSV(t *testing.T) {
-	now := time.Now()
-	changes := []Change{
-		{
-			ClusterID:   "test-cluster",
-			DetectedAt:  now,
-			Variable:    "test.setting.one",
-			OldValue:    "old1",
-			NewValue:    "new1",
-			Description: "First setting",
-			Version:     "v24.1.0",
-		},
-		{
-			ClusterID:   "test-cluster",
-			DetectedAt:  now.Add(-time.Hour),
-			Variable:    "test.setting.two",
-			OldValue:    "",
-			NewValue:    "added",
-			Description: "New setting",
-			Version:     "v24.1.0",
-		},
-	}
-
-	var buf bytes.Buffer
-	err := WriteChangesCSV(&buf, changes)
-	if err != nil {
-		t.Fatalf("WriteChangesCSV failed: %v", err)
-	}
-
-	reader := csv.NewReader(&buf)
-	records, err := reader.ReadAll()
-	if err != nil {
-		t.Fatalf("Failed to parse CSV output: %v", err)
-	}
-
-	if len(records) < 1 {
-		t.Fatal("Expected at least header row")
-	}
-	expectedHeaders := []string{"cluster_id", "detected_at", "variable", "version", "old_value", "new_value", "description"}
-	for i, h := range expectedHeaders {
-		if records[0][i] != h {
-			t.Errorf("Header[%d] = %q, expected %q", i, records[0][i], h)
-		}
-	}
-
-	if len(records) != 3 {
-		t.Errorf("Expected 3 rows (header + 2 data), got %d", len(records))
-	}
-
-	if records[1][0] != "test-cluster" {
-		t.Errorf("ClusterID = %q, expected 'test-cluster'", records[1][0])
-	}
-	if records[1][2] != "test.setting.one" {
-		t.Errorf("Variable = %q, expected 'test.setting.one'", records[1][2])
-	}
-	if records[1][4] != "old1" {
-		t.Errorf("OldValue = %q, expected 'old1'", records[1][4])
-	}
-	if records[1][5] != "new1" {
-		t.Errorf("NewValue = %q, expected 'new1'", records[1][5])
-	}
-}
-
-func TestWriteChangesCSVEmpty(t *testing.T) {
-	var buf bytes.Buffer
-	err := WriteChangesCSV(&buf, []Change{})
-	if err != nil {
-		t.Fatalf("WriteChangesCSV with empty changes failed: %v", err)
-	}
-
-	reader := csv.NewReader(&buf)
-	records, err := reader.ReadAll()
-	if err != nil {
-		t.Fatalf("Failed to parse CSV output: %v", err)
-	}
-
-	if len(records) != 1 {
-		t.Errorf("Expected 1 row (header only), got %d", len(records))
-	}
-}
-
-func TestGetLatestSettings(t *testing.T) {
-	store, ctx := setupStoreTest(t, 10*time.Second)
-
-	clusterID := "latest-settings-test-" + time.Now().Format("20060102150405.000")
-
-	settings := []Setting{
-		{Variable: "latest.test.a", Value: "valueA", SettingType: "s", Description: "Test A"},
-		{Variable: "latest.test.b", Value: "valueB", SettingType: "i", Description: "Test B"},
-	}
-	if err := store.SaveSnapshot(ctx, clusterID, settings, "v1.0"); err != nil {
-		t.Fatalf("Failed to save snapshot: %v", err)
-	}
-
-	latestSettings, err := store.GetLatestSettings(ctx, clusterID)
-	if err != nil {
-		t.Fatalf("GetLatestSettings failed: %v", err)
-	}
-
-	if len(latestSettings) != 2 {
-		t.Errorf("Expected 2 settings, got %d", len(latestSettings))
-	}
-
-	if s, ok := latestSettings["latest.test.a"]; !ok || s.Value != "valueA" {
-		t.Errorf("Expected latest.test.a=valueA, got %v", latestSettings["latest.test.a"])
-	}
-
-	empty, err := store.GetLatestSettings(ctx, "non-existent-cluster-12345")
-	if err != nil {
-		t.Fatalf("GetLatestSettings for non-existent cluster failed: %v", err)
-	}
-	if len(empty) != 0 {
-		t.Errorf("Expected 0 settings for non-existent cluster, got %d", len(empty))
-	}
-}

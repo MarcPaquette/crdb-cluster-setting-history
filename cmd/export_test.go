@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"archive/zip"
-	"bytes"
 	"context"
-	"encoding/csv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,85 +20,6 @@ func getHistoryURL(t *testing.T) string {
 		t.Skip("HISTORY_DATABASE_URL not set")
 	}
 	return url
-}
-
-func TestWriteChangesCSV(t *testing.T) {
-	t.Parallel()
-	changes := []storage.Change{
-		{
-			ClusterID:   "test-cluster-123",
-			DetectedAt:  time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC),
-			Variable:    "test.setting.one",
-			Version:     "v25.1.0",
-			OldValue:    "old",
-			NewValue:    "new",
-			Description: "Test setting",
-		},
-		{
-			ClusterID:   "test-cluster-123",
-			DetectedAt:  time.Date(2025, 1, 15, 11, 0, 0, 0, time.UTC),
-			Variable:    "test.setting.two",
-			Version:     "v25.1.0",
-			OldValue:    "",
-			NewValue:    "added",
-			Description: "New setting",
-		},
-	}
-
-	var buf bytes.Buffer
-	err := storage.WriteChangesCSV(&buf, changes)
-	if err != nil {
-		t.Fatalf("WriteChangesCSV failed: %v", err)
-	}
-
-	reader := csv.NewReader(&buf)
-	records, err := reader.ReadAll()
-	if err != nil {
-		t.Fatalf("Failed to parse CSV: %v", err)
-	}
-
-	if len(records) < 1 {
-		t.Fatal("Expected at least header row")
-	}
-	expectedHeaders := []string{"cluster_id", "detected_at", "variable", "version", "old_value", "new_value", "description"}
-	for i, h := range expectedHeaders {
-		if i >= len(records[0]) || records[0][i] != h {
-			t.Errorf("Expected header[%d] = %s, got %s", i, h, records[0][i])
-		}
-	}
-
-	if len(records) != 3 {
-		t.Errorf("Expected 3 rows (1 header + 2 data), got %d", len(records))
-	}
-
-	if records[1][0] != "test-cluster-123" {
-		t.Errorf("Expected cluster_id 'test-cluster-123', got '%s'", records[1][0])
-	}
-	if records[1][2] != "test.setting.one" {
-		t.Errorf("Expected variable 'test.setting.one', got '%s'", records[1][2])
-	}
-	if records[1][3] != "v25.1.0" {
-		t.Errorf("Expected version 'v25.1.0', got '%s'", records[1][3])
-	}
-}
-
-func TestWriteChangesCSVEmptyChanges(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	err := storage.WriteChangesCSV(&buf, []storage.Change{})
-	if err != nil {
-		t.Fatalf("WriteChangesCSV failed: %v", err)
-	}
-
-	reader := csv.NewReader(&buf)
-	records, err := reader.ReadAll()
-	if err != nil {
-		t.Fatalf("Failed to parse CSV: %v", err)
-	}
-
-	if len(records) != 1 {
-		t.Errorf("Expected 1 row (header only), got %d", len(records))
-	}
 }
 
 func TestRunExport(t *testing.T) {
