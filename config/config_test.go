@@ -367,6 +367,27 @@ clusters:
 	}
 }
 
+func TestGetEnvDefault(t *testing.T) {
+	t.Setenv("TEST_GET_ENV", "test_value")
+
+	result := GetEnvDefault("TEST_GET_ENV", "default")
+	if result != "test_value" {
+		t.Errorf("Expected 'test_value', got '%s'", result)
+	}
+
+	result = GetEnvDefault("NON_EXISTING_VAR_12345", "default")
+	if result != "default" {
+		t.Errorf("Expected 'default', got '%s'", result)
+	}
+
+	t.Setenv("TEST_EMPTY_ENV", "")
+
+	result = GetEnvDefault("TEST_EMPTY_ENV", "default")
+	if result != "default" {
+		t.Errorf("Expected 'default' for empty env, got '%s'", result)
+	}
+}
+
 func TestParseDurationEnv(t *testing.T) {
 	def := 15 * time.Minute
 
