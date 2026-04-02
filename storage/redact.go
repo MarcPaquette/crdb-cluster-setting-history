@@ -5,8 +5,11 @@ import (
 	"strings"
 )
 
-// DefaultSensitivePatterns defines settings that may contain sensitive data.
-var DefaultSensitivePatterns = []string{
+// RedactedPlaceholder is the replacement value for redacted settings.
+const RedactedPlaceholder = "[REDACTED]"
+
+// defaultSensitivePatterns defines settings that may contain sensitive data.
+var defaultSensitivePatterns = []string{
 	"*.password*",
 	"*.secret*",
 	"*.key*",
@@ -39,8 +42,8 @@ func NewRedactor(cfg RedactorConfig) *Redactor {
 	}
 
 	// Combine default and additional patterns
-	patterns := make([]string, len(DefaultSensitivePatterns))
-	copy(patterns, DefaultSensitivePatterns)
+	patterns := make([]string, len(defaultSensitivePatterns))
+	copy(patterns, defaultSensitivePatterns)
 
 	if cfg.AdditionalPatterns != "" {
 		for _, p := range strings.Split(cfg.AdditionalPatterns, ",") {
@@ -100,25 +103,19 @@ func (r *Redactor) ShouldRedact(variable string) bool {
 	return false
 }
 
-// RedactValue returns "[REDACTED]" if the variable is sensitive, otherwise the original value.
+// RedactValue returns RedactedPlaceholder if the variable is sensitive, otherwise the original value.
 func (r *Redactor) RedactValue(variable, value string) string {
 	if r.ShouldRedact(variable) {
-		return "[REDACTED]"
+		return RedactedPlaceholder
 	}
 	return value
 }
 
 // RedactChange returns a copy of the change with sensitive values redacted.
 func (r *Redactor) RedactChange(c Change) Change {
-	if !r.enabled {
-		return c
-	}
-
 	result := c
-	if r.ShouldRedact(c.Variable) {
-		result.OldValue = "[REDACTED]"
-		result.NewValue = "[REDACTED]"
-	}
+	result.OldValue = r.RedactValue(c.Variable, c.OldValue)
+	result.NewValue = r.RedactValue(c.Variable, c.NewValue)
 	return result
 }
 
