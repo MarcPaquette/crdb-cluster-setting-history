@@ -141,10 +141,12 @@ func runServer() {
 	startCollectors(ctx, cfg, store)
 
 	tlsEnabled := getEnvBool("TLS_ENABLED", false)
+	tlsCertFile := os.Getenv("TLS_CERT_FILE")
+	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
 	handler := setupMiddleware(webServer.Handler(), authCfg, rateLimiter, tlsEnabled)
-	server := newHTTPServer(cfg.HTTPPort, handler, tlsEnabled)
+	server := newHTTPServer(cfg.HTTPPort, handler, tlsEnabled, tlsCertFile, tlsKeyFile)
 
-	go startServer(server, tlsEnabled, cfg.HTTPPort)
+	go startServer(server, tlsEnabled, cfg.HTTPPort, tlsCertFile, tlsKeyFile)
 	awaitShutdown(server, cancel)
 }
 
@@ -186,14 +188,16 @@ func setupAuth() auth.Config {
 
 func setupRateLimiter() *web.RateLimiter {
 	enabled := getEnvBool("RATE_LIMIT_ENABLED", false)
+	rps := getEnvFloat("RATE_LIMIT_RPS", 10)
+	burst := getEnvInt("RATE_LIMIT_BURST", 20)
 	rl := web.NewRateLimiter(web.RateLimiterConfig{
 		Enabled:           enabled,
-		RequestsPerSecond: getEnvFloat("RATE_LIMIT_RPS", 10),
-		Burst:             getEnvInt("RATE_LIMIT_BURST", 20),
+		RequestsPerSecond: rps,
+		Burst:             burst,
 		TrustProxy:        getEnvBool("TRUST_PROXY", false),
 	})
 	if enabled {
-		slog.Info("Rate limiting enabled", "rps", getEnvFloat("RATE_LIMIT_RPS", 10), "burst", getEnvInt("RATE_LIMIT_BURST", 20))
+		slog.Info("Rate limiting enabled", "rps", rps, "burst", burst)
 	}
 	return rl
 }
@@ -248,7 +252,7 @@ func setupMiddleware(handler http.Handler, authCfg auth.Config, rateLimiter *web
 	)
 }
 
-func newHTTPServer(port string, handler http.Handler, tlsEnabled bool) *http.Server {
+func newHTTPServer(port string, handler http.Handler, tlsEnabled bool, tlsCertFile, tlsKeyFile string) *http.Server {
 	server := &http.Server{
 		Addr:              ":" + port,
 		Handler:           handler,
@@ -259,8 +263,6 @@ func newHTTPServer(port string, handler http.Handler, tlsEnabled bool) *http.Ser
 	}
 
 	if tlsEnabled {
-		tlsCertFile := os.Getenv("TLS_CERT_FILE")
-		tlsKeyFile := os.Getenv("TLS_KEY_FILE")
 		if tlsCertFile == "" || tlsKeyFile == "" {
 			log.Fatal("TLS_CERT_FILE and TLS_KEY_FILE are required when TLS_ENABLED=true")
 		}
@@ -272,10 +274,10 @@ func newHTTPServer(port string, handler http.Handler, tlsEnabled bool) *http.Ser
 	return server
 }
 
-func startServer(server *http.Server, tlsEnabled bool, port string) {
+func startServer(server *http.Server, tlsEnabled bool, port, tlsCertFile, tlsKeyFile string) {
 	if tlsEnabled {
 		slog.Info("Starting HTTPS server", "port", port)
-		if err := server.ListenAndServeTLS(os.Getenv("TLS_CERT_FILE"), os.Getenv("TLS_KEY_FILE")); err != http.ErrServerClosed {
+		if err := server.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != http.ErrServerClosed {
 			log.Fatalf("HTTPS server error: %v", err)
 		}
 	} else {
