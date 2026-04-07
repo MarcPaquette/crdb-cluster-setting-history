@@ -115,7 +115,8 @@ func runServer() {
 	}
 	logClusterConfig(cfg)
 
-	authCfg := setupAuth()
+	tlsEnabled := getEnvBool("TLS_ENABLED", false)
+	authCfg := setupAuth(tlsEnabled)
 	rateLimiter := setupRateLimiter()
 	redactor := setupRedactor()
 
@@ -133,6 +134,7 @@ func runServer() {
 		web.WithRedactor(redactor),
 		web.WithClusters(cfg.Clusters),
 		web.WithDefaultClusterID(cfg.Clusters[0].ID),
+		web.WithAuthConfig(authCfg),
 	)
 	if err != nil {
 		log.Fatalf("Failed to initialize web server: %v", err)
@@ -140,7 +142,6 @@ func runServer() {
 
 	startCollectors(ctx, cfg, store)
 
-	tlsEnabled := getEnvBool("TLS_ENABLED", false)
 	tlsCertFile := os.Getenv("TLS_CERT_FILE")
 	tlsKeyFile := os.Getenv("TLS_KEY_FILE")
 	handler := setupMiddleware(webServer.Handler(), authCfg, rateLimiter, tlsEnabled)
@@ -161,13 +162,17 @@ func logClusterConfig(cfg *config.Config) {
 	}
 }
 
-func setupAuth() auth.Config {
+func setupAuth(tlsEnabled bool) auth.Config {
 	authEnabled := getEnvBool("AUTH_ENABLED", false)
+	publicPaths := auth.ParsePublicPaths(os.Getenv("AUTH_PUBLIC_PATHS"))
+	// Always allow login/logout without authentication
+	publicPaths = appendUnique(publicPaths, "/login", "/logout")
+
 	authCfg := auth.Config{
 		Enabled:     authEnabled,
 		Username:    config.GetEnvDefault("AUTH_USERNAME", "admin"),
 		APIKeys:     auth.ParseAPIKeys(os.Getenv("AUTH_API_KEYS")),
-		PublicPaths: auth.ParsePublicPaths(os.Getenv("AUTH_PUBLIC_PATHS")),
+		PublicPaths: publicPaths,
 	}
 
 	if authEnabled {
@@ -180,6 +185,7 @@ func setupAuth() auth.Config {
 			log.Fatalf("Failed to hash password: %v", err)
 		}
 		authCfg.PasswordHash = hash
+		authCfg.Session = auth.NewSessionConfig(tlsEnabled)
 		slog.Info("Authentication enabled", "user", authCfg.Username)
 	}
 
@@ -348,6 +354,20 @@ Security:
   REDACT_SENSITIVE      Redact sensitive values (default: false)
   REDACT_PATTERNS       Additional patterns to redact (comma-separated)
 `, os.Args[0])
+}
+
+func appendUnique(slice []string, items ...string) []string {
+	seen := make(map[string]bool, len(slice))
+	for _, s := range slice {
+		seen[s] = true
+	}
+	for _, item := range items {
+		if !seen[item] {
+			slice = append(slice, item)
+			seen[item] = true
+		}
+	}
+	return slice
 }
 
 func getEnvBool(key string, defaultValue bool) bool {

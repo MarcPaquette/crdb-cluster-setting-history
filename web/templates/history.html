@@ -4,219 +4,441 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Compare Over Time - CockroachDB Cluster Settings History</title>
+    <script nonce="{{.Nonce}}">
+        (function() {
+            var saved = localStorage.getItem('theme');
+            var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
     <style>
         :root {
-            --bg-primary: #f5f5f5;
-            --bg-secondary: white;
-            --text-primary: #333;
-            --text-secondary: #666;
-            --border-color: #eee;
-            --shadow-color: rgba(0,0,0,0.1);
-            --accent-color: #6933ff;
-            --hover-bg: #f9f9f9;
-            --old-value-bg: #fee;
-            --old-value-text: #c00;
-            --new-value-bg: #efe;
-            --new-value-text: #080;
-            --em-text: #999;
-            --warning-bg: #fff3cd;
-            --warning-text: #856404;
+            --bg-deep: #06060c;
+            --bg-primary: #0c0c14;
+            --bg-secondary: #111119;
+            --bg-tertiary: #161620;
+            --bg-elevated: #1a1a26;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --text-muted: #475569;
+            --accent: #6933FF;
+            --accent-hover: #7c4dff;
+            --accent-glow: rgba(105, 51, 255, 0.2);
+            --accent-subtle: rgba(105, 51, 255, 0.08);
+            --accent-secondary: #1BF8EC;
+            --border: #1e293b;
+            --border-accent: rgba(105, 51, 255, 0.25);
+            --hover-bg: rgba(105, 51, 255, 0.04);
+            --old-value-bg: rgba(248, 113, 113, 0.1);
+            --old-value-text: #f87171;
+            --new-value-bg: rgba(74, 222, 128, 0.1);
+            --new-value-text: #4ade80;
+            --em-text: #475569;
+            --warning-bg: rgba(251, 191, 36, 0.1);
+            --warning-text: #fbbf24;
+            --btn-text: #ffffff;
+            --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Menlo', 'Monaco', monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
         }
 
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg-primary: #1a1a1a;
-                --bg-secondary: #2d2d2d;
-                --text-primary: #e0e0e0;
-                --text-secondary: #a0a0a0;
-                --border-color: #404040;
-                --shadow-color: rgba(0,0,0,0.3);
-                --accent-color: #8b5cf6;
-                --hover-bg: #363636;
-                --old-value-bg: #3d1f1f;
-                --old-value-text: #f87171;
-                --new-value-bg: #1f3d1f;
-                --new-value-text: #4ade80;
-                --em-text: #707070;
-                --warning-bg: #3d3219;
-                --warning-text: #fcd34d;
-            }
+        :root[data-theme="light"] {
+            --bg-deep: #f1f5f9;
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #f8fafc;
+            --bg-elevated: #ffffff;
+            --text-primary: #242A35;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --accent: #6933FF;
+            --accent-hover: #5a24e6;
+            --accent-glow: rgba(105, 51, 255, 0.12);
+            --accent-subtle: rgba(105, 51, 255, 0.05);
+            --accent-secondary: #0fa89e;
+            --border: #D6DBE7;
+            --border-accent: rgba(105, 51, 255, 0.25);
+            --hover-bg: rgba(105, 51, 255, 0.04);
+            --old-value-bg: rgba(220, 38, 38, 0.08);
+            --old-value-text: #dc2626;
+            --new-value-bg: rgba(22, 163, 74, 0.08);
+            --new-value-text: #16a34a;
+            --em-text: #94a3b8;
+            --warning-bg: rgba(217, 119, 6, 0.08);
+            --warning-text: #d97706;
+            --btn-text: #ffffff;
         }
 
-        * {
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0;
-            padding: 20px;
+            font-family: var(--font-sans);
             background: var(--bg-primary);
             color: var(--text-primary);
+            min-height: 100vh;
+            background-image:
+                linear-gradient(var(--accent-subtle) 1px, transparent 1px),
+                linear-gradient(90deg, var(--accent-subtle) 1px, transparent 1px);
+            background-size: 60px 60px;
         }
-        h1, h2 {
-            color: var(--text-primary);
-            margin-bottom: 5px;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        .back-link {
-            color: var(--accent-color);
-            text-decoration: none;
-            display: inline-block;
-            margin-bottom: 20px;
-        }
-        .back-link:hover {
-            text-decoration: underline;
-        }
-        .controls {
+
+        /* === Navigation === */
+        .nav {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 0 24px;
             display: flex;
             align-items: center;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 20px;
-            color: var(--text-secondary);
+            height: 52px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(8px);
         }
-        .cluster-select, .snapshot-select {
-            padding: 8px 12px;
+
+        .nav-brand {
+            font-family: var(--font-mono);
             font-size: 14px;
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            background: var(--bg-secondary);
+            font-weight: 600;
             color: var(--text-primary);
-            cursor: pointer;
-            min-width: 150px;
+            text-decoration: none;
+            letter-spacing: -0.3px;
+            margin-right: 32px;
+            white-space: nowrap;
         }
-        .snapshot-select {
-            min-width: 250px;
+
+        .nav-links {
+            display: flex;
+            gap: 4px;
+            list-style: none;
         }
-        .cluster-select:focus, .snapshot-select:focus {
-            outline: none;
-            border-color: var(--accent-color);
-        }
-        .compare-btn {
-            padding: 8px 16px;
-            font-size: 14px;
-            border: none;
-            border-radius: 4px;
-            background: var(--accent-color);
-            color: white;
-            cursor: pointer;
-        }
-        .compare-btn:hover {
-            opacity: 0.9;
-        }
-        .compare-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: var(--bg-secondary);
-            box-shadow: 0 1px 3px var(--shadow-color);
-            margin-bottom: 30px;
-        }
-        th, td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid var(--border-color);
-        }
-        th {
-            background: var(--accent-color);
-            color: white;
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 13px;
             font-weight: 500;
+            padding: 6px 12px;
+            border-radius: 6px;
+            transition: color 0.15s, background 0.15s;
         }
-        tr:hover {
+
+        .nav-links a:hover {
+            color: var(--text-primary);
             background: var(--hover-bg);
         }
-        .value {
-            font-family: 'Monaco', 'Menlo', monospace;
-            font-size: 13px;
-            word-break: break-all;
+
+        .nav-links a.active {
+            color: var(--accent);
+            background: var(--accent-subtle);
         }
-        .before-value {
-            color: var(--old-value-text);
-            background: var(--old-value-bg);
-            padding: 2px 4px;
-            border-radius: 2px;
-        }
-        .after-value {
-            color: var(--new-value-text);
-            background: var(--new-value-bg);
-            padding: 2px 4px;
-            border-radius: 2px;
-        }
-        .variable {
-            font-weight: 500;
-            cursor: help;
-        }
-        .variable[title]:hover {
-            text-decoration: underline dotted;
-        }
-        em {
-            color: var(--em-text);
-        }
-        .section-header {
-            margin-top: 30px;
-            margin-bottom: 10px;
-            padding: 10px;
-            background: var(--bg-secondary);
-            border-radius: 4px;
-            border-left: 4px solid var(--accent-color);
-        }
-        .section-header h2 {
-            margin: 0;
-            font-size: 16px;
-        }
-        .section-header .count {
-            color: var(--text-secondary);
-            font-weight: normal;
-            font-size: 14px;
-        }
-        .no-results {
-            padding: 20px;
-            text-align: center;
-            color: var(--text-secondary);
-            background: var(--bg-secondary);
-            border-radius: 4px;
-        }
-        .loading {
-            padding: 40px;
-            text-align: center;
-            color: var(--text-secondary);
-        }
-        .hidden {
-            display: none;
-        }
-        .arrow-text {
-            font-weight: bold;
-            color: var(--text-secondary);
-            padding: 0 5px;
-            font-size: 18px;
-        }
-        .control-group {
+
+        .nav-right {
+            margin-left: auto;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
         }
-        .control-label {
-            font-size: 12px;
-            text-transform: uppercase;
+
+        .theme-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: none;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            transition: border-color 0.15s, background 0.15s;
             color: var(--text-secondary);
-            margin-bottom: 4px;
         }
+
+        .theme-toggle:hover {
+            border-color: var(--text-muted);
+            background: var(--hover-bg);
+        }
+
+        .theme-toggle .icon-sun { display: none; }
+        .theme-toggle .icon-moon { display: inline; }
+        :root[data-theme="light"] .theme-toggle .icon-sun { display: inline; }
+        :root[data-theme="light"] .theme-toggle .icon-moon { display: none; }
+
+        .logout-btn {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 12px;
+            padding: 5px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: none;
+            cursor: pointer;
+            font-family: var(--font-sans);
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .logout-btn:hover {
+            color: var(--text-secondary);
+            border-color: var(--text-muted);
+        }
+
+        /* === Main Content === */
+        .container {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .page-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-primary);
+            letter-spacing: -0.3px;
+            margin-bottom: 20px;
+        }
+
+        /* === Controls === */
+        .controls {
+            display: flex;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
         .control-stack {
             display: flex;
             flex-direction: column;
+            gap: 4px;
         }
+
+        .control-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .cluster-select, .snapshot-select {
+            padding: 7px 12px;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            outline: none;
+            min-width: 150px;
+        }
+
+        .snapshot-select {
+            min-width: 240px;
+        }
+
+        .cluster-select:focus, .snapshot-select:focus {
+            border-color: var(--accent);
+        }
+
+        .arrow-text {
+            font-family: var(--font-mono);
+            font-weight: 600;
+            color: var(--accent-secondary);
+            font-size: 18px;
+            padding: 0 4px;
+            align-self: flex-end;
+            padding-bottom: 6px;
+        }
+
+        .btn {
+            padding: 7px 14px;
+            font-size: 12px;
+            font-weight: 500;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.15s;
+            font-family: var(--font-sans);
+            white-space: nowrap;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: var(--btn-text);
+            border: none;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+            box-shadow: 0 0 12px var(--accent-glow);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        /* === Table === */
+        .table-wrapper {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            padding: 10px 14px;
+            text-align: left;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border);
+            font-family: var(--font-mono);
+        }
+
+        td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+
+        tr:last-child td { border-bottom: none; }
+
+        tr:hover td { background: var(--hover-bg); }
+
+        .value {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            word-break: break-all;
+        }
+
+        .before-value {
+            color: var(--old-value-text);
+            background: var(--old-value-bg);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        .after-value {
+            color: var(--new-value-text);
+            background: var(--new-value-bg);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        .variable {
+            font-weight: 500;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            cursor: help;
+        }
+
+        .variable[title]:hover {
+            color: var(--accent);
+            text-decoration: underline dotted;
+        }
+
+        em { color: var(--em-text); font-style: normal; font-size: 11px; }
+
+        /* === Section Headers === */
+        .section-header {
+            margin-top: 24px;
+            margin-bottom: 8px;
+            padding: 10px 14px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px 8px 0 0;
+            border-bottom: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-header + .table-wrapper {
+            border-top-left-radius: 0;
+            border-top-right-radius: 0;
+        }
+
+        .section-header h2 {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .section-header .count {
+            color: var(--text-muted);
+            font-weight: 400;
+            font-size: 12px;
+        }
+
+        .section-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .section-dot.changed { background: var(--accent); }
+        .section-dot.removed { background: var(--old-value-text); }
+        .section-dot.added { background: var(--new-value-text); }
+
+        /* === States === */
+        .no-results {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-muted);
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 13px;
+        }
+
+        .loading {
+            padding: 40px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .hidden { display: none; }
     </style>
 </head>
 <body>
+    <nav class="nav">
+        <a href="/" class="nav-brand">Cockroach Database Settings Auditor</a>
+        <ul class="nav-links">
+            <li><a href="/">Dashboard</a></li>
+            <li><a href="/history{{if .CurrentCluster}}?cluster={{.CurrentCluster}}{{end}}" class="active">History</a></li>
+            {{if gt (len .Clusters) 1}}
+            <li><a href="/compare">Compare</a></li>
+            {{end}}
+        </ul>
+        <div class="nav-right">
+            <button id="themeToggle" class="theme-toggle" title="Toggle theme">
+                <span class="icon-sun">&#9788;</span>
+                <span class="icon-moon">&#9790;</span>
+            </button>
+            <form method="POST" action="/logout" style="margin:0;padding:0;display:inline;">
+                <button type="submit" class="logout-btn">Logout</button>
+            </form>
+        </div>
+    </nav>
+
     <div class="container">
-        <a href="/" class="back-link">&larr; Back to Changes</a>
-        <h1>Compare Settings Over Time</h1>
+        <h1 class="page-title">Compare Settings Over Time</h1>
 
         <div class="controls">
             {{if gt (len .Clusters) 1}}
@@ -242,7 +464,7 @@
                     <option value="">Select snapshot...</option>
                 </select>
             </div>
-            <button id="compareBtn" class="compare-btn" disabled>Compare</button>
+            <button id="compareBtn" class="btn btn-primary" disabled>Compare</button>
         </div>
 
         <div id="loading" class="loading hidden">Loading comparison...</div>
@@ -356,14 +578,12 @@
         }
 
         function renderResults(data) {
-            const beforeLabel = getSnapshotLabel(snapshot1Select.value);
-            const afterLabel = getSnapshotLabel(snapshot2Select.value);
             let html = '';
 
             // Changed settings section
             if (data.different && data.different.length > 0) {
-                html += '<div class="section-header"><h2>Changed Settings <span class="count">(' + data.different.length + ')</span></h2></div>';
-                html += '<table><thead><tr><th>Setting</th><th>Before</th><th>After</th></tr></thead><tbody>';
+                html += '<div class="section-header"><span class="section-dot changed"></span><h2>Changed Settings <span class="count">(' + data.different.length + ')</span></h2></div>';
+                html += '<div class="table-wrapper"><table><thead><tr><th>Setting</th><th>Before</th><th>After</th></tr></thead><tbody>';
                 for (const diff of data.different) {
                     html += '<tr>';
                     html += '<td class="variable" title="' + escapeHtml(diff.description || '') + '">' + escapeHtml(diff.variable) + '</td>';
@@ -371,33 +591,33 @@
                     html += '<td class="value"><span class="after-value">' + escapeHtml(diff.value2) + '</span></td>';
                     html += '</tr>';
                 }
-                html += '</tbody></table>';
+                html += '</tbody></table></div>';
             }
 
             // Removed settings section (before_only)
             if (data.before_only && data.before_only.length > 0) {
-                html += '<div class="section-header"><h2>Removed Settings <span class="count">(' + data.before_only.length + ')</span></h2></div>';
-                html += '<table><thead><tr><th>Setting</th><th>Previous Value</th></tr></thead><tbody>';
+                html += '<div class="section-header"><span class="section-dot removed"></span><h2>Removed Settings <span class="count">(' + data.before_only.length + ')</span></h2></div>';
+                html += '<div class="table-wrapper"><table><thead><tr><th>Setting</th><th>Previous Value</th></tr></thead><tbody>';
                 for (const diff of data.before_only) {
                     html += '<tr>';
                     html += '<td class="variable" title="' + escapeHtml(diff.description || '') + '">' + escapeHtml(diff.variable) + '</td>';
                     html += '<td class="value"><span class="before-value">' + escapeHtml(diff.value1) + '</span></td>';
                     html += '</tr>';
                 }
-                html += '</tbody></table>';
+                html += '</tbody></table></div>';
             }
 
             // Added settings section (after_only)
             if (data.after_only && data.after_only.length > 0) {
-                html += '<div class="section-header"><h2>Added Settings <span class="count">(' + data.after_only.length + ')</span></h2></div>';
-                html += '<table><thead><tr><th>Setting</th><th>New Value</th></tr></thead><tbody>';
+                html += '<div class="section-header"><span class="section-dot added"></span><h2>Added Settings <span class="count">(' + data.after_only.length + ')</span></h2></div>';
+                html += '<div class="table-wrapper"><table><thead><tr><th>Setting</th><th>New Value</th></tr></thead><tbody>';
                 for (const diff of data.after_only) {
                     html += '<tr>';
                     html += '<td class="variable" title="' + escapeHtml(diff.description || '') + '">' + escapeHtml(diff.variable) + '</td>';
                     html += '<td class="value"><span class="after-value">' + escapeHtml(diff.value2) + '</span></td>';
                     html += '</tr>';
                 }
-                html += '</tbody></table>';
+                html += '</tbody></table></div>';
             }
 
             if (!html) {
@@ -413,6 +633,13 @@
             div.textContent = str;
             return div.innerHTML;
         }
+
+        document.getElementById('themeToggle').addEventListener('click', function() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const next = current === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+        });
     </script>
 </body>
 </html>

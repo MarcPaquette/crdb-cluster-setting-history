@@ -10,11 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"crdb-cluster-history/auth"
 	"crdb-cluster-history/config"
 	"crdb-cluster-history/storage"
 )
@@ -891,5 +893,113 @@ func TestWithClusters(t *testing.T) {
 
 	if len(result) != 2 {
 		t.Errorf("Expected 2 clusters, got %d", len(result))
+	}
+}
+
+func testAuthConfig() auth.Config {
+	hash, _ := auth.HashPassword("secret")
+	return auth.Config{
+		Enabled:      true,
+		Username:     "admin",
+		PasswordHash: hash,
+		Session:      auth.NewSessionConfig(false),
+	}
+}
+
+func TestHandleLoginPage(t *testing.T) {
+	_, _, server := setupTest(t, WithAuthConfig(testAuthConfig()))
+
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Login") {
+		t.Error("Expected login page content")
+	}
+	if !strings.Contains(body, "username") {
+		t.Error("Expected username field")
+	}
+}
+
+func TestHandleLoginSubmit_Success(t *testing.T) {
+	cfg := testAuthConfig()
+	_, _, server := setupTest(t, WithAuthConfig(cfg))
+
+	form := url.Values{}
+	form.Set("username", "admin")
+	form.Set("password", "secret")
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("Expected 303 redirect, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "/" {
+		t.Errorf("Expected redirect to /, got %q", loc)
+	}
+
+	// Check session cookie was set
+	cookies := w.Result().Cookies()
+	found := false
+	for _, c := range cookies {
+		if c.Name == "session" {
+			found = true
+			_, valid := auth.ValidateSessionToken(c.Value, cfg.Session)
+			if !valid {
+				t.Error("Expected valid session token in cookie")
+			}
+		}
+	}
+	if !found {
+		t.Error("Expected session cookie to be set")
+	}
+}
+
+func TestHandleLoginSubmit_Failure(t *testing.T) {
+	_, _, server := setupTest(t, WithAuthConfig(testAuthConfig()))
+
+	form := url.Values{}
+	form.Set("username", "admin")
+	form.Set("password", "wrong")
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200 (re-rendered login page), got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Invalid username or password") {
+		t.Error("Expected error message in response")
+	}
+}
+
+func TestHandleLogout(t *testing.T) {
+	_, _, server := setupTest(t, WithAuthConfig(testAuthConfig()))
+
+	req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	w := httptest.NewRecorder()
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("Expected 303 redirect, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "/login" {
+		t.Errorf("Expected redirect to /login, got %q", loc)
+	}
+
+	// Check session cookie was cleared
+	cookies := w.Result().Cookies()
+	for _, c := range cookies {
+		if c.Name == "session" && c.MaxAge != -1 {
+			t.Error("Expected session cookie to be cleared (MaxAge -1)")
+		}
 	}
 }

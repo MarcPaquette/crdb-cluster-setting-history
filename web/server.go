@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"crdb-cluster-history/auth"
 	"crdb-cluster-history/config"
 	"crdb-cluster-history/storage"
 
@@ -84,6 +85,7 @@ type Server struct {
 	redactor         *storage.Redactor
 	defaultClusterID string                 // Default cluster ID for single-cluster mode
 	clusters         []config.ClusterConfig // List of configured clusters
+	authCfg          auth.Config            // Authentication configuration
 }
 
 // Option configures the Server.
@@ -107,6 +109,13 @@ func WithDefaultClusterID(clusterID string) Option {
 func WithClusters(clusters []config.ClusterConfig) Option {
 	return func(s *Server) {
 		s.clusters = clusters
+	}
+}
+
+// WithAuthConfig sets the authentication configuration.
+func WithAuthConfig(cfg auth.Config) Option {
+	return func(s *Server) {
+		s.authCfg = cfg
 	}
 }
 
@@ -171,6 +180,8 @@ func (s *Server) isValidCluster(id string) bool {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/login", s.handleLogin)
+	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/export", s.handleExport)
 	mux.HandleFunc("/compare", s.handleCompare)
@@ -182,6 +193,64 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/annotations", s.handleAnnotations)
 	mux.HandleFunc("/api/annotations/", s.handleAnnotationByID)
 	return mux
+}
+
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.renderLogin(w, r, "")
+	case http.MethodPost:
+		s.handleLoginSubmit(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) renderLogin(w http.ResponseWriter, r *http.Request, errorMsg string) {
+	data := struct {
+		Error string
+		Nonce string
+	}{
+		Error: errorMsg,
+		Nonce: GetNonce(r.Context()),
+	}
+
+	if err := s.tmpl.ExecuteTemplate(w, "login.html", data); err != nil {
+		slog.Error("Template error", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.renderLogin(w, r, "Invalid form data")
+		return
+	}
+
+	username := r.FormValue("username")
+	password := r.FormValue("password")
+
+	if username == "" || password == "" {
+		s.renderLogin(w, r, "Username and password are required")
+		return
+	}
+
+	if !auth.CheckCredentials(username, password, s.authCfg) {
+		s.renderLogin(w, r, "Invalid username or password")
+		return
+	}
+
+	auth.SetSessionCookie(w, username, s.authCfg.Session)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	auth.ClearSessionCookie(w)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -731,7 +800,16 @@ func (s *Server) annotationToResponse(a *storage.Annotation) AnnotationResponse 
 
 func (s *Server) getUsernameFromRequest(r *http.Request) string {
 	username, _, _ := r.BasicAuth()
-	return username
+	if username != "" {
+		return username
+	}
+	// Fall back to session cookie
+	if cookie, err := r.Cookie("session"); err == nil {
+		if name, valid := auth.ValidateSessionToken(cookie.Value, s.authCfg.Session); valid {
+			return name
+		}
+	}
+	return ""
 }
 
 func (s *Server) redactChangesWithAnnotations(changes []storage.ChangeWithAnnotation) []storage.ChangeWithAnnotation {
