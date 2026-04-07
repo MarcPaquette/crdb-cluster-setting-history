@@ -220,6 +220,46 @@ func TestCollectAndCleanup(t *testing.T) {
 	t.Logf("After collectAndCleanup: %d settings in snapshot", len(snapshot))
 }
 
+func TestSourceClusterIDOnlyAttemptedOnce(t *testing.T) {
+	ctx, store, coll, clusterID := setupCollectorTest(t, 30*time.Second, 15*time.Minute)
+
+	// Before first collect, flag should be false
+	if coll.sourceClusterIDDone {
+		t.Fatal("Expected sourceClusterIDDone to be false before first collect")
+	}
+
+	// First collect — should successfully retrieve source cluster ID
+	err := coll.collect(ctx)
+	if err != nil {
+		t.Fatalf("first collect() failed: %v", err)
+	}
+
+	// After first collect, flag should be true
+	if !coll.sourceClusterIDDone {
+		t.Error("Expected sourceClusterIDDone to be true after first collect")
+	}
+
+	// Verify source cluster ID was actually set
+	sourceID, err := store.GetSourceClusterID(ctx, clusterID)
+	if err != nil {
+		t.Fatalf("GetSourceClusterID failed: %v", err)
+	}
+	if sourceID == "" {
+		t.Error("Expected source cluster ID to be set after first collect")
+	}
+
+	// Second collect — should NOT re-attempt
+	err = coll.collect(ctx)
+	if err != nil {
+		t.Fatalf("second collect() failed: %v", err)
+	}
+
+	// Flag should still be true
+	if !coll.sourceClusterIDDone {
+		t.Error("Expected sourceClusterIDDone to remain true after second collect")
+	}
+}
+
 func TestCleanupWithRetention(t *testing.T) {
 	ctx, _, coll, _ := setupCollectorTest(t, 30*time.Second, 15*time.Minute)
 

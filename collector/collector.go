@@ -24,11 +24,12 @@ type Store interface {
 }
 
 type Collector struct {
-	pool      *pgxpool.Pool
-	store     Store
-	clusterID string        // Config cluster ID (e.g., "prod", "staging")
-	interval  time.Duration
-	retention time.Duration
+	pool                *pgxpool.Pool
+	store               Store
+	clusterID           string        // Config cluster ID (e.g., "prod", "staging")
+	interval            time.Duration
+	retention           time.Duration
+	sourceClusterIDDone bool // true after first attempt (success or failure) to avoid retrying
 }
 
 func New(ctx context.Context, clusterID, connString string, store Store, interval time.Duration) (*Collector, error) {
@@ -117,8 +118,11 @@ func (c *Collector) cleanup(ctx context.Context) error {
 func (c *Collector) collect(ctx context.Context) error {
 	slog.Info("Collecting cluster settings", "cluster", c.clusterID)
 
-	if err := c.updateSourceClusterID(ctx); err != nil {
-		slog.Warn("Failed to update source cluster ID", "cluster", c.clusterID, "error", err)
+	if !c.sourceClusterIDDone {
+		if err := c.updateSourceClusterID(ctx); err != nil {
+			slog.Warn("Failed to update source cluster ID", "cluster", c.clusterID, "error", err)
+		}
+		c.sourceClusterIDDone = true
 	}
 	fullVersion, err := c.fetchVersion(ctx)
 	if err != nil {
@@ -176,8 +180,19 @@ func extractShortVersion(fullVersion string) string {
 }
 
 func (c *Collector) updateSourceClusterID(ctx context.Context) error {
+	conn, err := c.pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+
+	// crdb_internal requires allow_unsafe_internals in newer CockroachDB versions
+	if _, err := conn.Exec(ctx, "SET allow_unsafe_internals = true"); err != nil {
+		return err
+	}
+
 	var sourceClusterID string
-	err := c.pool.QueryRow(ctx, "SELECT crdb_internal.cluster_id()::TEXT").Scan(&sourceClusterID)
+	err = conn.QueryRow(ctx, "SELECT crdb_internal.cluster_id()::TEXT").Scan(&sourceClusterID)
 	if err != nil {
 		return err
 	}

@@ -89,15 +89,17 @@ func runInit() {
 	dbName := config.GetEnvDefault("HISTORY_DB_NAME", "cluster_history")
 	username := config.GetEnvDefault("HISTORY_USERNAME", "history_user")
 	password := os.Getenv("HISTORY_PASSWORD")
+	sourceUsername := os.Getenv("SOURCE_USERNAME")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cfg := cmd.InitConfig{
-		AdminURL:     adminURL,
-		DatabaseName: dbName,
-		Username:     username,
-		Password:     password,
+		AdminURL:       adminURL,
+		DatabaseName:   dbName,
+		Username:       username,
+		Password:       password,
+		SourceUsername: sourceUsername,
 	}
 
 	if err := cmd.RunInit(ctx, cfg); err != nil {
@@ -330,6 +332,7 @@ Configuration:
 Environment Variables:
   DATABASE_URL          CockroachDB connection string (required)
   HISTORY_DATABASE_URL  Connection to history database (required for server/export)
+  SOURCE_USERNAME       Source cluster monitoring user (init only, optional; grants VIEWCLUSTERMETADATA)
   POLL_INTERVAL         Collection interval (default: 15m)
   RETENTION             Data retention period, e.g., 720h for 30 days (default: unlimited)
   HTTP_PORT             Web server port (default: 8080)

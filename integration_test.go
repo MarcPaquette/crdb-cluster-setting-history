@@ -52,6 +52,7 @@ func TestFullIntegration(t *testing.T) {
 		}
 
 		conn.Exec(cleanupCtx, "ALTER DEFAULT PRIVILEGES FOR ROLE root REVOKE ALL ON TABLES FROM "+pgx.Identifier{username}.Sanitize())
+		conn.Exec(cleanupCtx, "REVOKE SYSTEM VIEWCLUSTERMETADATA FROM "+pgx.Identifier{username}.Sanitize())
 		_, err = conn.Exec(cleanupCtx, "DROP USER IF EXISTS "+pgx.Identifier{username}.Sanitize())
 		if err != nil {
 			t.Logf("Cleanup: failed to drop user: %v", err)
