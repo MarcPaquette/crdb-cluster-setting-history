@@ -79,6 +79,7 @@ This ensures the history user can only perform data operations on its tables and
 - `TLS_ENABLED`, `TLS_CERT_FILE`, `TLS_KEY_FILE` - HTTPS/TLS settings
 - `RATE_LIMIT_ENABLED`, `RATE_LIMIT_RPS`, `RATE_LIMIT_BURST` - Rate limiting
 - `REDACT_SENSITIVE`, `REDACT_PATTERNS` - Sensitive value redaction
+- `HISTORY_ADMIN_URL` - Admin connection to history cluster (tests only, defaults to `DATABASE_URL`)
 
 ## CLI Commands
 
