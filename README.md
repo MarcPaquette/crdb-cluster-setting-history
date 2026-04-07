@@ -282,37 +282,40 @@ docker-compose -f docker-compose.secure.yml up -d
 
 ## Architecture
 
-### Single-Cluster Mode
-```
-┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
-│  CockroachDB    │────▶│  Collector   │────▶│  CockroachDB    │
-│  (monitored)    │     │  (periodic)  │     │  (history db)   │
-└─────────────────┘     └──────────────┘     └─────────────────┘
-                                                    │
-                                                    ▼
-                                            ┌─────────────┐
-                                            │  Web Server │
-                                            │  (diff UI)  │
-                                            └─────────────┘
+```mermaid
+flowchart LR
+    subgraph Monitored Clusters
+        prod[(Production\nCockroachDB)]
+        staging[(Staging\nCockroachDB)]
+        dev[(Development\nCockroachDB)]
+    end
+
+    subgraph crdb-cluster-history
+        config[Config Loader\nYAML / env vars]
+        manager[Collector Manager]
+        c1[Collector]
+        c2[Collector]
+        c3[Collector]
+        storage[Storage Layer\nchange detection · snapshots\nannotations · metadata]
+        web[Web Server\ndashboard · compare · history\nCSV export · health check]
+        auth[Auth & Security\nBasic Auth · API keys\nrate limiting · TLS · CSP]
+    end
+
+    histdb[(History\nCockroachDB)]
+
+    config -->|configures| manager
+    manager --> c1 & c2 & c3
+    prod -- "SHOW CLUSTER SETTINGS" --> c1
+    staging -- "SHOW CLUSTER SETTINGS" --> c2
+    dev -- "SHOW CLUSTER SETTINGS" --> c3
+    c1 & c2 & c3 -->|snapshots & changes| storage
+    storage <-->|read/write| histdb
+    web -->|queries| storage
+    auth -->|protects| web
+    web -->|":8080"| browser((Browser))
 ```
 
-### Multi-Cluster Mode
-```
-┌─────────────────┐
-│  Production     │──┐
-│  CockroachDB    │  │
-└─────────────────┘  │     ┌──────────────┐     ┌─────────────────┐
-                     ├────▶│  Collector   │────▶│  CockroachDB    │
-┌─────────────────┐  │     │  Manager     │     │  (history db)   │
-│  Staging        │──┤     └──────────────┘     └─────────────────┘
-│  CockroachDB    │  │                                 │
-└─────────────────┘  │                                 ▼
-                     │                         ┌─────────────┐
-┌─────────────────┐  │                         │  Web Server │
-│  Development    │──┘                         │  (diff UI)  │
-│  CockroachDB    │                            │  + compare  │
-└─────────────────┘                            └─────────────┘
-```
+> In **single-cluster mode**, only one collector runs and the cluster selector / compare features are hidden.
 
 ### Components
 
