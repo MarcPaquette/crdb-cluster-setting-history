@@ -17,7 +17,8 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://root@localhost:26257/defaultdb?sslmode=disable
-      HISTORY_DATABASE_URL: postgresql://history_test_user@localhost:26257/cluster_history?sslmode=disable
+      HISTORY_DATABASE_URL: postgresql://history_test_user@localhost:26258/cluster_history?sslmode=disable
+      HISTORY_ADMIN_URL: postgresql://root@localhost:26258/defaultdb?sslmode=disable
 
     steps:
       - uses: actions/checkout@v4
@@ -26,35 +27,47 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Start CockroachDB
+      - name: Start CockroachDB (source cluster)
         run: |
-          docker run -d --name cockroachdb \
+          docker run -d --name cockroachdb-source \
             -p 26257:26257 -p 8080:8080 \
             cockroachdb/cockroach:latest \
             start-single-node --insecure --advertise-addr=localhost
 
-      - name: Wait for CockroachDB
+      - name: Start CockroachDB (history cluster)
         run: |
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
-              echo "CockroachDB is ready"
-              exit 0
-            fi
-            echo "Waiting... (attempt $i/30)"
-            sleep 2
-          done
-          echo "CockroachDB failed to start"
-          docker logs cockroachdb
-          exit 1
+          docker run -d --name cockroachdb-history \
+            -p 26258:26257 -p 8081:8080 \
+            cockroachdb/cockroach:latest \
+            start-single-node --insecure --advertise-addr=localhost
 
-      - name: Initialize test database
+      - name: Wait for CockroachDB clusters
         run: |
-          docker exec cockroachdb cockroach sql --insecure -e "
+          for port in 8080 8081; do
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:$port/health > /dev/null 2>&1; then
+                echo "CockroachDB on port $port is ready"
+                break
+              fi
+              echo "Waiting for port $port... (attempt $i/30)"
+              sleep 2
+              if [ $i -eq 30 ]; then
+                echo "CockroachDB on port $port failed to start"
+                docker logs cockroachdb-source
+                docker logs cockroachdb-history
+                exit 1
+              fi
+            done
+          done
+
+      - name: Initialize test database on history cluster
+        run: |
+          docker exec cockroachdb-history cockroach sql --insecure -e "
             CREATE DATABASE IF NOT EXISTS cluster_history;
             CREATE USER IF NOT EXISTS history_test_user;
             GRANT ALL ON DATABASE cluster_history TO history_test_user;
           "
-          docker exec cockroachdb cockroach sql --insecure \
+          docker exec cockroachdb-history cockroach sql --insecure \
             --database=cluster_history -e "
             ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO history_test_user;
           "
@@ -75,4 +88,8 @@ jobs:
 
       - name: CockroachDB logs on failure
         if: failure()
-        run: docker logs cockroachdb
+        run: |
+          echo "=== Source cluster logs ==="
+          docker logs cockroachdb-source
+          echo "=== History cluster logs ==="
+          docker logs cockroachdb-history

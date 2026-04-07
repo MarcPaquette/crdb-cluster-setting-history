@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,22 +17,29 @@ import (
 
 func TestFullIntegration(t *testing.T) {
 	testClusterID := fmt.Sprintf("integ-%d", time.Now().UnixNano())
-	adminURL := os.Getenv("DATABASE_URL")
-	if adminURL == "" {
+	sourceURL := os.Getenv("DATABASE_URL")
+	if sourceURL == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	// HISTORY_ADMIN_URL points to the history cluster's admin connection.
+	// Falls back to DATABASE_URL for single-instance setups.
+	historyAdminURL := os.Getenv("HISTORY_ADMIN_URL")
+	if historyAdminURL == "" {
+		historyAdminURL = sourceURL
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dbName := "cluster_history_test"
-	username := "history_test_user"
+	dbName := "cluster_history_integ_test"
+	username := "history_integ_user"
 
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
 
-		conn, err := pgx.Connect(cleanupCtx, adminURL)
+		conn, err := pgx.Connect(cleanupCtx, historyAdminURL)
 		if err != nil {
 			t.Logf("Cleanup: failed to connect for cleanup: %v", err)
 			return
@@ -54,7 +62,7 @@ func TestFullIntegration(t *testing.T) {
 
 	t.Log("Step 1: Initializing database and user...")
 	initCfg := cmd.InitConfig{
-		AdminURL:     adminURL,
+		AdminURL:     historyAdminURL,
 		DatabaseName: dbName,
 		Username:     username,
 		Password:     "",
@@ -65,7 +73,7 @@ func TestFullIntegration(t *testing.T) {
 	}
 
 	t.Log("Step 2: Connecting to history database...")
-	historyURL := "postgresql://" + username + "@localhost:26257/" + dbName + "?sslmode=disable"
+	historyURL := replaceDBUserAndName(historyAdminURL, username, dbName)
 	store, err := storage.New(ctx, historyURL)
 	if err != nil {
 		t.Fatalf("Failed to connect to history database: %v", err)
@@ -73,7 +81,7 @@ func TestFullIntegration(t *testing.T) {
 	defer store.Close()
 
 	t.Log("Step 3: Running collector...")
-	coll, err := collector.New(ctx, testClusterID, adminURL, store, time.Hour)
+	coll, err := collector.New(ctx, testClusterID, sourceURL, store, time.Hour)
 	if err != nil {
 		t.Fatalf("Failed to create collector: %v", err)
 	}
@@ -112,4 +120,32 @@ func TestFullIntegration(t *testing.T) {
 		t.Logf("  %s = %s", variable, setting.Value)
 		count++
 	}
+}
+
+// replaceDBUserAndName builds a connection URL from an admin URL by replacing
+// the username and database name, preserving the host, port, and query params.
+func replaceDBUserAndName(adminURL, user, dbName string) string {
+	// Parse: postgresql://root@localhost:26258/defaultdb?sslmode=disable
+	// Result: postgresql://user@localhost:26258/dbName?sslmode=disable
+	const prefix = "postgresql://"
+	if !strings.HasPrefix(adminURL, prefix) {
+		return adminURL
+	}
+	rest := adminURL[len(prefix):]
+	atIdx := strings.Index(rest, "@")
+	if atIdx == -1 {
+		return adminURL
+	}
+	hostAndPath := rest[atIdx+1:]
+	slashIdx := strings.Index(hostAndPath, "/")
+	if slashIdx == -1 {
+		return prefix + user + "@" + hostAndPath + "/" + dbName
+	}
+	host := hostAndPath[:slashIdx]
+	afterDB := hostAndPath[slashIdx+1:]
+	query := ""
+	if qIdx := strings.Index(afterDB, "?"); qIdx != -1 {
+		query = afterDB[qIdx:]
+	}
+	return prefix + user + "@" + host + "/" + dbName + query
 }
