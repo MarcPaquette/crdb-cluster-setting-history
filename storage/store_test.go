@@ -456,6 +456,39 @@ func TestSetAndGetMetadata(t *testing.T) {
 	}
 }
 
+func TestMetadataSameKeyDifferentClusters(t *testing.T) {
+	store, ctx := setupStoreTest(t, 60*time.Second)
+	cleanupTestData(t, store)
+
+	// Set same key for two different clusters — this should work with composite PK
+	err := store.SetMetadata(ctx, "cluster-a", "database_version", "v25.1.0")
+	if err != nil {
+		t.Fatalf("Failed to set metadata for cluster-a: %v", err)
+	}
+
+	err = store.SetMetadata(ctx, "cluster-b", "database_version", "v25.2.0")
+	if err != nil {
+		t.Fatalf("Failed to set metadata for cluster-b: %v", err)
+	}
+
+	// Verify each cluster has its own value
+	valueA, err := store.GetMetadata(ctx, "cluster-a", "database_version")
+	if err != nil {
+		t.Fatalf("Failed to get metadata for cluster-a: %v", err)
+	}
+	if valueA != "v25.1.0" {
+		t.Errorf("Expected 'v25.1.0' for cluster-a, got '%s'", valueA)
+	}
+
+	valueB, err := store.GetMetadata(ctx, "cluster-b", "database_version")
+	if err != nil {
+		t.Fatalf("Failed to get metadata for cluster-b: %v", err)
+	}
+	if valueB != "v25.2.0" {
+		t.Errorf("Expected 'v25.2.0' for cluster-b, got '%s'", valueB)
+	}
+}
+
 func TestSourceClusterIDMetadata(t *testing.T) {
 	store, ctx := setupStoreTest(t, 10*time.Second)
 

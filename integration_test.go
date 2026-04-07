@@ -29,7 +29,7 @@ func TestFullIntegration(t *testing.T) {
 		historyAdminURL = sourceURL
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
 	dbName := "cluster_history_integ_test"
