@@ -274,14 +274,21 @@ func newHTTPServer(port string, handler http.Handler, tlsEnabled bool, tlsCertFi
 	return server
 }
 
-func startServer(server *http.Server, tlsEnabled bool, port, tlsCertFile, tlsKeyFile string) {
+func listenAddress(tlsEnabled bool, port string) string {
+	scheme := "http"
 	if tlsEnabled {
-		slog.Info("Starting HTTPS server", "port", port)
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://localhost:%s", scheme, port)
+}
+
+func startServer(server *http.Server, tlsEnabled bool, port, tlsCertFile, tlsKeyFile string) {
+	fmt.Printf("Listening on %s\n", listenAddress(tlsEnabled, port))
+	if tlsEnabled {
 		if err := server.ListenAndServeTLS(tlsCertFile, tlsKeyFile); err != http.ErrServerClosed {
 			log.Fatalf("HTTPS server error: %v", err)
 		}
 	} else {
-		slog.Info("Starting HTTP server", "port", port)
 		if err := server.ListenAndServe(); err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
