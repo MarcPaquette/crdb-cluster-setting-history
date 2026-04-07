@@ -582,7 +582,7 @@
         </ul>
         <div class="nav-right">
             {{if gt (len .Clusters) 1}}
-            <select id="clusterSelector" class="nav-cluster-select" onchange="selectCluster(this.value)">
+            <select id="clusterSelector" class="nav-cluster-select">
                 {{range .Clusters}}
                 <option value="{{.ID}}" {{if eq .ID $.CurrentCluster}}selected{{end}}>{{.Name}}</option>
                 {{end}}
@@ -655,7 +655,7 @@
                         </td>
                         <td>
                             <button class="notes-btn {{if .Annotation}}has-note{{end}}"
-                                    onclick="openNoteModal('{{.ID}}', {{if .Annotation}}'{{.Annotation.ID}}', '{{js .Annotation.Content}}'{{else}}'0', ''{{end}})"
+                                    data-change-id="{{.ID}}" data-annotation-id="{{if .Annotation}}{{.Annotation.ID}}{{else}}0{{end}}" data-annotation-content="{{if .Annotation}}{{.Annotation.Content}}{{end}}"
                                     title="{{if .Annotation}}View/Edit Note{{else}}Add Note{{end}}">
                                 {{if .Annotation}}view{{else}}+{{end}}
                             </button>
@@ -681,7 +681,7 @@
             <div id="modalMeta" class="modal-meta"></div>
             <div class="modal-buttons">
                 <button id="deleteNoteBtn" class="modal-btn modal-btn-danger" style="display:none">Delete</button>
-                <button onclick="closeModal()" class="modal-btn modal-btn-secondary">Cancel</button>
+                <button id="cancelNoteBtn" class="modal-btn modal-btn-secondary">Cancel</button>
                 <button id="saveNoteBtn" class="modal-btn modal-btn-primary">Save</button>
             </div>
         </div>
@@ -817,6 +817,18 @@
         // Wire up button handlers
         document.getElementById('saveNoteBtn').addEventListener('click', saveNote);
         document.getElementById('deleteNoteBtn').addEventListener('click', deleteNote);
+        document.getElementById('cancelNoteBtn').addEventListener('click', closeModal);
+
+        // Wire up notes buttons via event delegation
+        document.querySelectorAll('.notes-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                openNoteModal(
+                    this.dataset.changeId,
+                    this.dataset.annotationId,
+                    this.dataset.annotationContent || ''
+                );
+            });
+        });
 
         // Close modal on escape key
         document.addEventListener('keydown', function(e) {
@@ -837,10 +849,13 @@
         });
 
         // Cluster selection
-        function selectCluster(clusterID) {
-            const url = new URL(window.location.href);
-            url.searchParams.set('cluster', clusterID);
-            window.location.href = url.toString();
+        const clusterSelector = document.getElementById('clusterSelector');
+        if (clusterSelector) {
+            clusterSelector.addEventListener('change', function() {
+                const url = new URL(window.location.href);
+                url.searchParams.set('cluster', this.value);
+                window.location.href = url.toString();
+            });
         }
     </script>
 </body>
