@@ -100,6 +100,15 @@ var migrations = []migration{
 			-- This is handled specially in code since it requires checking existing PK structure
 		`,
 	},
+	{
+		version:     6,
+		description: "drop leftover unique constraint on metadata key column",
+		sql: `
+			-- When CockroachDB drops a primary key, it auto-creates a secondary UNIQUE
+			-- constraint on the old PK columns (named metadata_key_key). This prevents
+			-- different clusters from storing the same metadata key. Drop it.
+		`,
+	},
 }
 
 // runMigrations applies all pending migrations to the database.
@@ -126,6 +135,10 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 
 		if m.version == 5 {
 			if err := migrateMetadataPK(ctx, pool); err != nil {
+				return fmt.Errorf("migration %d (%s): %w", m.version, m.description, err)
+			}
+		} else if m.version == 6 {
+			if err := dropMetadataKeyUnique(ctx, pool); err != nil {
 				return fmt.Errorf("migration %d (%s): %w", m.version, m.description, err)
 			}
 		} else {
@@ -171,6 +184,31 @@ func migrateMetadataPK(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 
 	return nil
+}
+
+// dropMetadataKeyUnique drops the secondary UNIQUE constraint on metadata(key) that
+// CockroachDB auto-creates when the old single-column PK is dropped in migration 5.
+// This constraint prevents different clusters from using the same metadata key.
+func dropMetadataKeyUnique(ctx context.Context, pool *pgxpool.Pool) error {
+	var exists bool
+	err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.table_constraints
+			WHERE table_name = 'metadata'
+			AND constraint_name = 'metadata_key_key'
+			AND constraint_type = 'UNIQUE'
+		)
+	`).Scan(&exists)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		return nil
+	}
+
+	_, err = pool.Exec(ctx, "DROP INDEX metadata_key_key CASCADE")
+	return err
 }
 
 // initAndMigrate creates the migration tracking table, handles existing databases,
