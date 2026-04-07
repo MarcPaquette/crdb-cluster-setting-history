@@ -1,10 +1,7 @@
 package main
 
 import (
-	"os"
 	"testing"
-
-	"crdb-cluster-history/config"
 )
 
 func TestListenAddress(t *testing.T) {
@@ -52,6 +49,7 @@ func TestGetEnvDefault(t *testing.T) {
 	}
 }
 
+
 func TestGetEnvBool(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -73,8 +71,7 @@ func TestGetEnvBool(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			key := "TEST_BOOL_" + tt.name
 			if tt.set {
-				os.Setenv(key, tt.value)
-				defer os.Unsetenv(key)
+				t.Setenv(key, tt.value)
 			}
 			if got := getEnvBool(key, tt.def); got != tt.expected {
 				t.Errorf("getEnvBool(%q, %v) = %v, want %v", key, tt.def, got, tt.expected)
@@ -101,8 +98,7 @@ func TestGetEnvFloat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			key := "TEST_FLOAT_" + tt.name
 			if tt.set {
-				os.Setenv(key, tt.value)
-				defer os.Unsetenv(key)
+				t.Setenv(key, tt.value)
 			}
 			if got := getEnvFloat(key, tt.def); got != tt.expected {
 				t.Errorf("getEnvFloat(%q, %v) = %v, want %v", key, tt.def, got, tt.expected)
@@ -130,8 +126,7 @@ func TestGetEnvInt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			key := "TEST_INT_" + tt.name
 			if tt.set {
-				os.Setenv(key, tt.value)
-				defer os.Unsetenv(key)
+				t.Setenv(key, tt.value)
 			}
 			if got := getEnvInt(key, tt.def); got != tt.expected {
 				t.Errorf("getEnvInt(%q, %v) = %v, want %v", key, tt.def, got, tt.expected)
