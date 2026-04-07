@@ -4,6 +4,28 @@ import (
 	"testing"
 )
 
+func TestListenAddress(t *testing.T) {
+	tests := []struct {
+		name       string
+		tlsEnabled bool
+		port       string
+		expected   string
+	}{
+		{"http", false, "8080", "http://localhost:8080"},
+		{"https", true, "8443", "https://localhost:8443"},
+		{"custom port", false, "3000", "http://localhost:3000"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := listenAddress(tt.tlsEnabled, tt.port)
+			if got != tt.expected {
+				t.Errorf("listenAddress(%v, %q) = %q, want %q", tt.tlsEnabled, tt.port, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestGetEnvBool(t *testing.T) {
 	tests := []struct {
 		name     string
