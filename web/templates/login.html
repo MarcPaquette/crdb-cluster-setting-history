@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - CockroachDB Cluster History</title>
+    <script nonce="{{.Nonce}}">
+        (function() {
+            var saved = localStorage.getItem('theme');
+            var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <style>
+        :root {
+            --bg-deep: #06060c;
+            --bg-primary: #0c0c14;
+            --bg-card: #111119;
+            --bg-input: #0e0e16;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --text-muted: #475569;
+            --accent: #6933FF;
+            --accent-hover: #7c4dff;
+            --accent-glow: rgba(105, 51, 255, 0.2);
+            --accent-subtle: rgba(105, 51, 255, 0.08);
+            --accent-secondary: #1BF8EC;
+            --border: #1e293b;
+            --border-accent: rgba(105, 51, 255, 0.25);
+            --danger: #f87171;
+            --danger-bg: rgba(248, 113, 113, 0.08);
+            --btn-text: #ffffff;
+            --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Menlo', 'Monaco', monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        }
+
+        :root[data-theme="light"] {
+            --bg-deep: #f1f5f9;
+            --bg-primary: #f8fafc;
+            --bg-card: #ffffff;
+            --bg-input: #f8fafc;
+            --text-primary: #242A35;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --accent: #6933FF;
+            --accent-hover: #5a24e6;
+            --accent-glow: rgba(105, 51, 255, 0.12);
+            --accent-subtle: rgba(105, 51, 255, 0.05);
+            --accent-secondary: #0fa89e;
+            --border: #D6DBE7;
+            --border-accent: rgba(105, 51, 255, 0.25);
+            --danger: #dc2626;
+            --danger-bg: rgba(220, 38, 38, 0.06);
+            --btn-text: #ffffff;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            /* Geometric grid background */
+            background-image:
+                linear-gradient(var(--accent-subtle) 1px, transparent 1px),
+                linear-gradient(90deg, var(--accent-subtle) 1px, transparent 1px);
+            background-size: 40px 40px;
+            background-position: center center;
+        }
+
+        .login-container {
+            width: 100%;
+            max-width: 400px;
+            padding: 20px;
+        }
+
+        .login-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 40px 36px 36px;
+            box-shadow:
+                0 4px 24px rgba(0, 0, 0, 0.4),
+                0 0 60px var(--accent-glow);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .login-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg,
+                transparent,
+                var(--accent) 20%,
+                var(--accent-hover) 50%,
+                var(--accent) 80%,
+                transparent);
+        }
+
+        .brand {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .brand-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 48px;
+            height: 48px;
+            border: 1px solid var(--border-accent);
+            border-radius: 10px;
+            background: var(--bg-primary);
+            margin-bottom: 16px;
+            font-family: var(--font-mono);
+            font-size: 20px;
+            color: var(--accent-secondary);
+            letter-spacing: -1px;
+        }
+
+        .brand-name {
+            font-family: var(--font-mono);
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+            letter-spacing: -0.3px;
+            margin-bottom: 6px;
+        }
+
+        .brand-tagline {
+            font-size: 13px;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .error-message {
+            background: var(--danger-bg);
+            border: 1px solid rgba(248, 113, 113, 0.2);
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: var(--danger);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .error-message::before {
+            content: '!';
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--danger);
+            color: white;
+            font-size: 11px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-family: var(--font-mono);
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 10px 14px;
+            font-size: 14px;
+            font-family: var(--font-mono);
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            transition: border-color 0.15s, box-shadow 0.15s;
+            outline: none;
+        }
+
+        .form-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .form-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 11px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: var(--font-sans);
+            background: var(--accent);
+            color: var(--btn-text);
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.15s, box-shadow 0.15s;
+            margin-top: 8px;
+            letter-spacing: 0.2px;
+        }
+
+        .submit-btn:hover {
+            background: var(--accent-hover);
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .submit-btn:active {
+            transform: translateY(1px);
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 11px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .theme-toggle {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-card);
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+            transition: border-color 0.15s, background 0.15s;
+            color: var(--text-secondary);
+            z-index: 10;
+        }
+
+        .theme-toggle:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .theme-toggle .icon-sun { display: none; }
+        .theme-toggle .icon-moon { display: inline; }
+        :root[data-theme="light"] .theme-toggle .icon-sun { display: inline; }
+        :root[data-theme="light"] .theme-toggle .icon-moon { display: none; }
+
+        /* Subtle corner decoration */
+        .login-card::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, transparent 50%, var(--accent-subtle) 50%);
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <button id="themeToggle" class="theme-toggle" title="Toggle theme">
+        <span class="icon-sun">&#9788;</span>
+        <span class="icon-moon">&#9790;</span>
+    </button>
+
+    <div class="login-container">
+        <div class="login-card">
+            <div class="brand">
+                <div class="brand-icon">db</div>
+                <div class="brand-name">CockroachDB Cluster History</div>
+                <div class="brand-tagline">Settings change monitoring</div>
+            </div>
+
+            {{if .Error}}<div class="error-message">{{.Error}}</div>{{end}}
+
+            <form method="POST" action="/login">
+                <div class="form-group">
+                    <label class="form-label" for="username">Username</label>
+                    <input class="form-input" type="text" id="username" name="username" placeholder="admin" autocomplete="username" autofocus>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="password">Password</label>
+                    <input class="form-input" type="password" id="password" name="password" placeholder="Enter password" autocomplete="current-password">
+                </div>
+                <button class="submit-btn" type="submit">Sign In</button>
+            </form>
+
+            <div class="footer">Authenticated access only</div>
+        </div>
+    </div>
+
+    <script nonce="{{.Nonce}}">
+        document.querySelector('form').addEventListener('submit', function() {
+            document.querySelector('.submit-btn').textContent = 'Signing in...';
+            document.querySelector('.submit-btn').disabled = true;
+        });
+
+        document.getElementById('themeToggle').addEventListener('click', function() {
+            var current = document.documentElement.getAttribute('data-theme');
+            var next = current === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+        });
+    </script>
+</body>
+</html>

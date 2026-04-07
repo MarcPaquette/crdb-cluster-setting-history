@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"testing"
+	"time"
 )
 
 // Shared bcrypt hash for "secret" — avoids repeating the expensive hash in every test.
@@ -159,6 +160,197 @@ func TestParsePublicPaths(t *testing.T) {
 		if got := ParsePublicPaths(tt.input); !slices.Equal(got, tt.expected) {
 			t.Errorf("ParsePublicPaths(%q) = %v, expected %v", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestCreateAndValidateSessionToken(t *testing.T) {
+	t.Parallel()
+	cfg := NewSessionConfig(false)
+
+	token := CreateSessionToken("admin", cfg)
+	if token == "" {
+		t.Fatal("expected non-empty token")
+	}
+
+	username, valid := ValidateSessionToken(token, cfg)
+	if !valid {
+		t.Fatal("expected valid token")
+	}
+	if username != "admin" {
+		t.Errorf("expected username 'admin', got %q", username)
+	}
+}
+
+func TestSessionTokenExpiry(t *testing.T) {
+	t.Parallel()
+	cfg := NewSessionConfig(false)
+	cfg.MaxAge = -1 * time.Second // already expired
+
+	token := CreateSessionToken("admin", cfg)
+	_, valid := ValidateSessionToken(token, cfg)
+	if valid {
+		t.Error("expected expired token to be invalid")
+	}
+}
+
+func TestSessionTokenTampering(t *testing.T) {
+	t.Parallel()
+	cfg := NewSessionConfig(false)
+
+	token := CreateSessionToken("admin", cfg)
+	// Tamper with the token by flipping a character
+	tampered := []byte(token)
+	if tampered[0] == 'A' {
+		tampered[0] = 'B'
+	} else {
+		tampered[0] = 'A'
+	}
+
+	_, valid := ValidateSessionToken(string(tampered), cfg)
+	if valid {
+		t.Error("expected tampered token to be invalid")
+	}
+}
+
+func TestSessionTokenWrongSecret(t *testing.T) {
+	t.Parallel()
+	cfg1 := NewSessionConfig(false)
+	cfg2 := NewSessionConfig(false)
+
+	token := CreateSessionToken("admin", cfg1)
+	_, valid := ValidateSessionToken(token, cfg2)
+	if valid {
+		t.Error("expected token validated with wrong secret to be invalid")
+	}
+}
+
+func TestSetSessionCookie(t *testing.T) {
+	t.Parallel()
+	cfg := NewSessionConfig(false)
+
+	w := httptest.NewRecorder()
+	SetSessionCookie(w, "admin", cfg)
+
+	cookies := w.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected session cookie to be set")
+	}
+	cookie := cookies[0]
+	if cookie.Name != "session" {
+		t.Errorf("expected cookie name 'session', got %q", cookie.Name)
+	}
+	if !cookie.HttpOnly {
+		t.Error("expected HttpOnly cookie")
+	}
+
+	// Validate the cookie value is a valid token
+	username, valid := ValidateSessionToken(cookie.Value, cfg)
+	if !valid {
+		t.Error("expected cookie value to be a valid token")
+	}
+	if username != "admin" {
+		t.Errorf("expected username 'admin', got %q", username)
+	}
+}
+
+func TestClearSessionCookie(t *testing.T) {
+	t.Parallel()
+	w := httptest.NewRecorder()
+	ClearSessionCookie(w)
+
+	cookies := w.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("expected cookie to be set")
+	}
+	if cookies[0].MaxAge != -1 {
+		t.Errorf("expected MaxAge -1, got %d", cookies[0].MaxAge)
+	}
+}
+
+func TestMiddleware_ValidSessionCookie(t *testing.T) {
+	t.Parallel()
+	cfg := testBasicAuthConfig()
+	cfg.Session = NewSessionConfig(false)
+
+	token := CreateSessionToken("admin", cfg.Session)
+
+	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: token})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 with valid session cookie, got %d", rec.Code)
+	}
+}
+
+func TestMiddleware_ExpiredSessionCookie(t *testing.T) {
+	t.Parallel()
+	cfg := testBasicAuthConfig()
+	cfg.Session = NewSessionConfig(false)
+	cfg.Session.MaxAge = -1 * time.Second
+
+	token := CreateSessionToken("admin", cfg.Session)
+
+	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: token})
+	req.Header.Set("Accept", "text/html")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("expected redirect (303) with expired cookie, got %d", rec.Code)
+	}
+}
+
+func TestMiddleware_BrowserRedirectToLogin(t *testing.T) {
+	t.Parallel()
+	cfg := testBasicAuthConfig()
+
+	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Errorf("expected redirect (303) for browser request, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/login" {
+		t.Errorf("expected redirect to /login, got %q", loc)
+	}
+}
+
+func TestMiddleware_APIStill401(t *testing.T) {
+	t.Parallel()
+	cfg := testBasicAuthConfig()
+
+	handler := Middleware(cfg)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/clusters", nil)
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for API request, got %d", rec.Code)
 	}
 }
 
