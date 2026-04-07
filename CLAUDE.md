@@ -55,7 +55,7 @@ The service monitors a CockroachDB cluster by periodically querying `SHOW CLUSTE
 - `web/` - HTTP server with embedded HTML templates, security middleware (auth, rate limiting, headers). Features: real-time search filter, download CSV, dark/light mode, description tooltips, cluster selector, time-based comparison
 - `auth/` - Authentication middleware supporting Basic Auth and API keys, configurable public paths
 - `config/` - YAML configuration loading for multi-cluster mode, environment variable fallback, validation
-- `cmd/init.go` - Init command to create history database and user with least-privilege permissions, auto-detects insecure mode
+- `cmd/init.go` - Init command to create history database and user with least-privilege permissions, auto-detects insecure mode, optionally grants VIEWCLUSTERMETADATA to source monitoring user
 - `cmd/export.go` - CLI export command to export changes to zipped CSV with cluster_id and version
 
 **Two database connections:**
@@ -66,6 +66,7 @@ The service monitors a CockroachDB cluster by periodically querying `SHOW CLUSTE
 The `init` command creates a history user with minimal required privileges:
 - **Database level:** `CONNECT`, `CREATE` (CREATE needed for initial schema migration)
 - **Table level:** `SELECT`, `INSERT`, `UPDATE`, `DELETE` only (via default privileges)
+- **System level (optional):** `VIEWCLUSTERMETADATA` on the source monitoring user (when `SOURCE_USERNAME` is set)
 - **NOT granted:** `DROP`, `ALTER`, admin privileges, or full database ownership
 
 This ensures the history user can only perform data operations on its tables and cannot drop the database, modify schema after creation, or perform administrative actions.
@@ -79,6 +80,7 @@ This ensures the history user can only perform data operations on its tables and
 - `TLS_ENABLED`, `TLS_CERT_FILE`, `TLS_KEY_FILE` - HTTPS/TLS settings
 - `RATE_LIMIT_ENABLED`, `RATE_LIMIT_RPS`, `RATE_LIMIT_BURST` - Rate limiting
 - `REDACT_SENSITIVE`, `REDACT_PATTERNS` - Sensitive value redaction
+- `SOURCE_USERNAME` - Source cluster monitoring user to grant `VIEWCLUSTERMETADATA` (init only, optional)
 - `HISTORY_ADMIN_URL` - Admin connection to history cluster (tests only, defaults to `DATABASE_URL`)
 
 ## CLI Commands

@@ -9,10 +9,11 @@ import (
 )
 
 type InitConfig struct {
-	AdminURL     string // Connection URL with admin privileges
-	DatabaseName string // Name of the history database to create
-	Username     string // Username for the history user
-	Password     string // Password for the history user (optional in insecure mode)
+	AdminURL       string // Connection URL with admin privileges
+	DatabaseName   string // Name of the history database to create
+	Username       string // Username for the history user
+	Password       string // Password for the history user (optional in insecure mode)
+	SourceUsername string // Username for monitoring the source cluster (optional; receives VIEWCLUSTERMETADATA grant)
 }
 
 func RunInit(ctx context.Context, cfg InitConfig) error {
@@ -92,6 +93,19 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 			// This might fail if not supported, log but continue
 			slog.Warn("Could not set default privileges", "error", err)
 		}
+	}
+
+	// Grant VIEWCLUSTERMETADATA to the source monitoring user (if specified)
+	if cfg.SourceUsername != "" {
+		sourceUserName := pgx.Identifier{cfg.SourceUsername}.Sanitize()
+		slog.Info("Granting VIEWCLUSTERMETADATA to source monitoring user", "user", cfg.SourceUsername)
+		_, err = conn.Exec(ctx, fmt.Sprintf("GRANT SYSTEM VIEWCLUSTERMETADATA TO %s", sourceUserName))
+		if err != nil {
+			slog.Warn("Could not grant VIEWCLUSTERMETADATA", "user", cfg.SourceUsername, "error", err)
+		}
+	} else {
+		slog.Info("SOURCE_USERNAME not set, skipping VIEWCLUSTERMETADATA grant",
+			"hint", "To grant manually: GRANT SYSTEM VIEWCLUSTERMETADATA TO <monitoring_user>")
 	}
 
 	slog.Info("Initialization complete")
