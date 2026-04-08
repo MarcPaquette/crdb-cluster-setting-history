@@ -11,11 +11,11 @@ HTTP_PORT_BASE=8090
 DEFAULT_NUM_CLUSTERS=5
 
 VERSIONS=(
+    "latest-v26.1"
+    "latest-v25.4"
     "latest-v24.3"
-    "latest-v24.2"
     "latest-v24.1"
     "latest-v23.2"
-    "latest-v23.1"
 )
 
 RUNTIME=""
