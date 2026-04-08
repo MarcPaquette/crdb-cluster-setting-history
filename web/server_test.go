@@ -906,6 +906,122 @@ func testAuthConfig() auth.Config {
 	}
 }
 
+func TestHandleFleet(t *testing.T) {
+	_, _, server := setupTest(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/fleet", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d", w.Code)
+	}
+
+	contentType := w.Header().Get("Content-Type")
+	if !strings.Contains(contentType, "text/html") {
+		t.Errorf("Expected text/html, got %s", contentType)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "Fleet Comparison") {
+		t.Error("Expected page title in response")
+	}
+	if !strings.Contains(body, "multi-compare.html") == false && !strings.Contains(body, "fleet") {
+		t.Error("Expected fleet page content")
+	}
+}
+
+func TestHandleAPIClusterSettings(t *testing.T) {
+	ctx, store, server := setupTest(t)
+
+	clusterID := "fleet-test-cluster-" + time.Now().Format("20060102150405.000")
+
+	settings := []storage.Setting{
+		{Variable: "fleet.test.setting1", Value: "value1", SettingType: "s", Description: "Test setting 1"},
+		{Variable: "fleet.test.setting2", Value: "value2", SettingType: "s", Description: "Test setting 2"},
+	}
+	if err := store.SaveSnapshot(ctx, clusterID, settings, "v1.0"); err != nil {
+		t.Fatalf("Failed to save snapshot: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/cluster-settings?cluster="+clusterID, nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	contentType := w.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Expected application/json, got %s", contentType)
+	}
+
+	var result map[string]ClusterSettingResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("Failed to parse JSON: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Errorf("Expected 2 settings, got %d", len(result))
+	}
+
+	if s, ok := result["fleet.test.setting1"]; !ok {
+		t.Error("Expected fleet.test.setting1 in result")
+	} else {
+		if s.Value != "value1" {
+			t.Errorf("Expected value 'value1', got %q", s.Value)
+		}
+		if s.Description != "Test setting 1" {
+			t.Errorf("Expected description 'Test setting 1', got %q", s.Description)
+		}
+	}
+}
+
+func TestHandleAPIClusterSettingsMissingCluster(t *testing.T) {
+	_, _, server := setupTest(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/cluster-settings", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for missing cluster param, got %d", w.Code)
+	}
+}
+
+func TestHandleAPIClusterSettingsInvalidCluster(t *testing.T) {
+	clusters := []config.ClusterConfig{
+		{ID: "valid-cluster", Name: "Valid", DatabaseURL: "postgresql://valid"},
+	}
+	_, _, server := setupTest(t, WithClusters(clusters))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/cluster-settings?cluster=invalid-cluster", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected 400 for invalid cluster, got %d", w.Code)
+	}
+}
+
+func TestHandleAPIClusterSettingsMethodNotAllowed(t *testing.T) {
+	_, _, server := setupTest(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/cluster-settings?cluster=test", nil)
+	w := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected 405, got %d", w.Code)
+	}
+}
+
 func TestHandleLoginPage(t *testing.T) {
 	_, _, server := setupTest(t, WithAuthConfig(testAuthConfig()))
 
