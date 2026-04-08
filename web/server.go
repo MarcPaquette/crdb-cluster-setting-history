@@ -185,8 +185,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/export", s.handleExport)
 	mux.HandleFunc("/compare", s.handleCompare)
+	mux.HandleFunc("/fleet", s.handleFleet)
 	mux.HandleFunc("/history", s.handleHistory)
 	mux.HandleFunc("/api/clusters", s.handleAPIClusters)
+	mux.HandleFunc("/api/cluster-settings", s.handleAPIClusterSettings)
 	mux.HandleFunc("/api/compare", s.handleAPICompare)
 	mux.HandleFunc("/api/snapshots", s.handleAPISnapshots)
 	mux.HandleFunc("/api/compare-snapshots", s.handleAPICompareSnapshots)
@@ -518,6 +520,62 @@ func (s *Server) handleAPICompare(w http.ResponseWriter, r *http.Request) {
 		Cluster1Only: diff.OnlyInA,
 		Cluster2Only: diff.OnlyInB,
 		Different:    diff.Different,
+	}
+
+	jsonResponse(w, http.StatusOK, result)
+}
+
+// handleFleet renders the multi-cluster fleet comparison page.
+func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
+	data := struct {
+		Nonce string
+	}{
+		Nonce: GetNonce(r.Context()),
+	}
+
+	if err := s.tmpl.ExecuteTemplate(w, "multi-compare.html", data); err != nil {
+		slog.Error("Template error", "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
+// ClusterSettingResponse represents a single setting in the cluster-settings API response.
+type ClusterSettingResponse struct {
+	Value       string `json:"value"`
+	Description string `json:"description"`
+}
+
+// handleAPIClusterSettings returns all current settings for a single cluster as JSON.
+func (s *Server) handleAPIClusterSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	clusterID := r.URL.Query().Get("cluster")
+	if clusterID == "" {
+		s.jsonError(w, "cluster query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	if !s.isValidCluster(clusterID) {
+		s.jsonError(w, "invalid cluster ID", http.StatusBadRequest)
+		return
+	}
+
+	settings, err := s.store.GetLatestSnapshot(r.Context(), clusterID)
+	if err != nil {
+		slog.Error("Error getting settings for cluster", "cluster", clusterID, "error", err)
+		s.jsonError(w, "Failed to get settings", http.StatusInternalServerError)
+		return
+	}
+
+	result := make(map[string]ClusterSettingResponse, len(settings))
+	for variable, setting := range settings {
+		result[variable] = ClusterSettingResponse{
+			Value:       setting.Value,
+			Description: setting.Description,
+		}
 	}
 
 	jsonResponse(w, http.StatusOK, result)

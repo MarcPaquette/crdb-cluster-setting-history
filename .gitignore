@@ -32,6 +32,7 @@ certs/
 
 # Configuration files with credentials (use clusters.yaml.example as template)
 clusters.yaml
+clusters-fleet-test.yaml
 
 # Claude Code
 .claude/

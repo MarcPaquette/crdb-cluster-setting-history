@@ -1,0 +1,1586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fleet Comparison - CockroachDB Cluster Settings History</title>
+    <script nonce="{{.Nonce}}">
+        (function() {
+            var saved = localStorage.getItem('theme');
+            var theme = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Lexend:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* === Root Variables === */
+        :root {
+            --bg-deep: #06060c;
+            --bg-primary: #0c0c14;
+            --bg-secondary: #111119;
+            --bg-tertiary: #161620;
+            --bg-elevated: #1a1a26;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --text-muted: #475569;
+            --accent: #6933FF;
+            --accent-hover: #7c4dff;
+            --accent-glow: rgba(105, 51, 255, 0.2);
+            --accent-subtle: rgba(105, 51, 255, 0.08);
+            --accent-secondary: #1BF8EC;
+            --border: #1e293b;
+            --border-accent: rgba(105, 51, 255, 0.25);
+            --hover-bg: rgba(105, 51, 255, 0.04);
+            --btn-text: #ffffff;
+
+            --cell-match-bg: rgba(34, 197, 94, 0.12);
+            --cell-match-border: rgba(34, 197, 94, 0.30);
+            --cell-diff-bg: rgba(245, 158, 11, 0.22);
+            --cell-diff-border: rgba(245, 158, 11, 0.55);
+            --cell-diff-text: #f59e0b;
+            --cell-diff-glow: rgba(245, 158, 11, 0.15);
+            --cell-missing-bg: rgba(239, 68, 68, 0.10);
+            --cell-missing-border: rgba(239, 68, 68, 0.25);
+            --cell-match-text: #22c55e;
+
+            --font-mono: 'DM Mono', 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+            --font-sans: 'Lexend', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        }
+
+        :root[data-theme="light"] {
+            --bg-deep: #f1f5f9;
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #f8fafc;
+            --bg-elevated: #ffffff;
+            --text-primary: #242A35;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --accent: #6933FF;
+            --accent-hover: #5a24e6;
+            --accent-glow: rgba(105, 51, 255, 0.12);
+            --accent-subtle: rgba(105, 51, 255, 0.05);
+            --accent-secondary: #0fa89e;
+            --border: #D6DBE7;
+            --border-accent: rgba(105, 51, 255, 0.25);
+            --hover-bg: rgba(105, 51, 255, 0.04);
+            --btn-text: #ffffff;
+
+            --cell-match-bg: rgba(34, 197, 94, 0.10);
+            --cell-match-border: rgba(34, 197, 94, 0.25);
+            --cell-diff-bg: rgba(245, 158, 11, 0.14);
+            --cell-diff-border: rgba(245, 158, 11, 0.45);
+            --cell-diff-text: #b45309;
+            --cell-diff-glow: rgba(245, 158, 11, 0.08);
+            --cell-missing-bg: rgba(239, 68, 68, 0.06);
+            --cell-missing-border: rgba(239, 68, 68, 0.20);
+            --cell-match-text: #16a34a;
+        }
+
+        /* === Reset & Base === */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            background-image:
+                linear-gradient(var(--accent-subtle) 1px, transparent 1px),
+                linear-gradient(90deg, var(--accent-subtle) 1px, transparent 1px);
+            background-size: 60px 60px;
+        }
+
+        .hidden { display: none !important; }
+
+        /* === Navigation === */
+        .nav {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 0 24px;
+            display: flex;
+            align-items: center;
+            height: 52px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(8px);
+        }
+
+        .nav-brand {
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            text-decoration: none;
+            letter-spacing: -0.3px;
+            margin-right: 32px;
+            white-space: nowrap;
+        }
+
+        .nav-links { display: flex; gap: 4px; list-style: none; }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            padding: 6px 12px;
+            border-radius: 6px;
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .nav-links a:hover { color: var(--text-primary); background: var(--hover-bg); }
+        .nav-links a.active { color: var(--accent); background: var(--accent-subtle); }
+
+        .nav-right {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .theme-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: none;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            transition: border-color 0.15s, background 0.15s;
+            color: var(--text-secondary);
+        }
+
+        .theme-toggle:hover { border-color: var(--text-muted); background: var(--hover-bg); }
+        .theme-toggle .icon-sun { display: none; }
+        .theme-toggle .icon-moon { display: inline; }
+        :root[data-theme="light"] .theme-toggle .icon-sun { display: inline; }
+        :root[data-theme="light"] .theme-toggle .icon-moon { display: none; }
+
+        .logout-btn {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 12px;
+            padding: 5px 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: none;
+            cursor: pointer;
+            font-family: var(--font-sans);
+            transition: color 0.15s, border-color 0.15s;
+        }
+
+        .logout-btn:hover { color: var(--text-secondary); border-color: var(--text-muted); }
+
+        /* === Page Container === */
+        .container {
+            max-width: 100%;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .page-header {
+            margin-bottom: 20px;
+        }
+
+        .page-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -0.4px;
+        }
+
+        .page-subtitle {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+            font-weight: 400;
+        }
+
+        /* === Controls Bar === */
+        .controls-bar {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .control-label {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+
+        .control-divider {
+            width: 1px;
+            height: 28px;
+            background: var(--border);
+            margin: 0 6px;
+        }
+
+        /* === Cluster Picker === */
+        .cluster-picker {
+            position: relative;
+        }
+
+        .picker-trigger {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            font-size: 12px;
+            font-family: var(--font-sans);
+            font-weight: 500;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            min-width: 180px;
+            transition: border-color 0.15s;
+        }
+
+        .picker-trigger:hover { border-color: var(--text-muted); }
+        .picker-trigger.open { border-color: var(--accent); }
+
+        .picker-count {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--accent);
+            color: var(--btn-text);
+            font-size: 10px;
+            font-weight: 600;
+            min-width: 18px;
+            height: 18px;
+            border-radius: 9px;
+            padding: 0 5px;
+        }
+
+        .picker-arrow {
+            margin-left: auto;
+            font-size: 10px;
+            color: var(--text-muted);
+            transition: transform 0.2s;
+        }
+
+        .picker-trigger.open .picker-arrow { transform: rotate(180deg); }
+
+        .picker-panel {
+            position: absolute;
+            top: calc(100% + 4px);
+            left: 0;
+            width: 560px;
+            max-height: 380px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .picker-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .picker-search {
+            flex: 1;
+            padding: 5px 10px;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            outline: none;
+        }
+
+        .picker-search:focus { border-color: var(--accent); }
+        .picker-search::placeholder { color: var(--text-muted); }
+
+        .btn-link {
+            background: none;
+            border: none;
+            color: var(--accent);
+            font-size: 11px;
+            font-weight: 500;
+            font-family: var(--font-sans);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+
+        .btn-link:hover { background: var(--accent-subtle); }
+
+        .picker-list {
+            overflow-y: auto;
+            padding: 6px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 2px;
+        }
+
+        .picker-item {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 5px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-family: var(--font-mono);
+            color: var(--text-secondary);
+            transition: background 0.1s, color 0.1s;
+            user-select: none;
+        }
+
+        .picker-item:hover { background: var(--hover-bg); }
+
+        .picker-item.selected {
+            background: var(--accent-subtle);
+            color: var(--text-primary);
+        }
+
+        .picker-check {
+            width: 14px;
+            height: 14px;
+            border: 1.5px solid var(--border);
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 9px;
+            transition: background 0.1s, border-color 0.1s;
+        }
+
+        .picker-item.selected .picker-check {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        /* === Filter & Controls === */
+        .filter-input {
+            padding: 6px 10px;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            outline: none;
+            width: 200px;
+            transition: border-color 0.15s;
+        }
+
+        .filter-input:focus { border-color: var(--accent); }
+        .filter-input::placeholder { color: var(--text-muted); }
+
+        .toggle-btn {
+            padding: 6px 10px;
+            font-size: 11px;
+            font-weight: 500;
+            font-family: var(--font-sans);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+
+        .toggle-btn:hover { border-color: var(--text-muted); }
+
+        .toggle-btn.active {
+            background: var(--accent-subtle);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .select-input {
+            padding: 6px 10px;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            cursor: pointer;
+            outline: none;
+        }
+
+        .select-input:focus { border-color: var(--accent); }
+
+        /* === Summary Bar === */
+        .summary-bar {
+            display: flex;
+            gap: 28px;
+            padding: 14px 18px;
+            margin-bottom: 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .summary-stat .stat-value {
+            font-family: var(--font-mono);
+            font-size: 22px;
+            font-weight: 600;
+            color: var(--text-primary);
+            line-height: 1;
+        }
+
+        .summary-stat .stat-value.warn { color: var(--cell-diff-text); }
+
+        .summary-stat .stat-label {
+            font-size: 10px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* === Matrix === */
+        .matrix-outer {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--bg-secondary);
+            position: relative;
+        }
+
+        .matrix-scroll {
+            overflow: auto;
+            max-height: calc(100vh - 320px);
+            position: relative;
+        }
+
+        .matrix-table {
+            border-collapse: separate;
+            border-spacing: 0;
+            width: max-content;
+            min-width: 100%;
+        }
+
+        /* Sticky setting name column */
+        .matrix-table th.col-setting,
+        .matrix-table td.col-setting {
+            position: sticky;
+            left: 0;
+            z-index: 3;
+            background: var(--bg-secondary);
+            min-width: 280px;
+            max-width: 280px;
+            border-right: 2px solid var(--border);
+        }
+
+        .matrix-table thead th.col-setting { z-index: 5; }
+
+        /* Sticky deviation column */
+        .matrix-table th.col-drift,
+        .matrix-table td.col-drift {
+            position: sticky;
+            right: 0;
+            z-index: 3;
+            background: var(--bg-secondary);
+            width: 64px;
+            min-width: 64px;
+            border-left: 2px solid var(--border);
+        }
+
+        .matrix-table thead th.col-drift { z-index: 5; }
+
+        /* Sticky header row */
+        .matrix-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 4;
+            background: var(--bg-tertiary);
+        }
+
+        /* Header cells */
+        .matrix-table thead th {
+            padding: 0;
+            border-bottom: 2px solid var(--border);
+            vertical-align: bottom;
+        }
+
+        .matrix-table thead th.col-setting {
+            padding: 10px 12px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            vertical-align: bottom;
+        }
+
+        .matrix-table thead th.col-drift {
+            padding: 10px 8px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            vertical-align: bottom;
+            text-align: center;
+        }
+
+        /* Cluster column headers - rotated */
+        .cluster-col-header {
+            height: 130px;
+            width: 34px;
+            min-width: 34px;
+            max-width: 34px;
+            padding: 6px 2px 4px 2px !important;
+            vertical-align: bottom;
+        }
+
+        .cluster-col-header-inner {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        .cluster-col-text {
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform-origin: bottom left;
+            transform: rotate(-55deg) translateX(-50%);
+            white-space: nowrap;
+            font-size: 10px;
+            font-family: var(--font-mono);
+            font-weight: 400;
+            color: var(--text-secondary);
+            max-width: 110px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: color 0.1s;
+            cursor: default;
+        }
+
+        .cluster-col-header.col-highlight .cluster-col-text {
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        /* Setting name cells */
+        .setting-name {
+            padding: 5px 12px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: help;
+            color: var(--text-primary);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .matrix-row:hover .setting-name {
+            color: var(--accent);
+        }
+
+        /* Matrix data cells */
+        .matrix-cell {
+            padding: 3px 3px;
+            text-align: center;
+            vertical-align: middle;
+            border-bottom: 1px solid var(--border);
+            width: 34px;
+            min-width: 34px;
+            max-width: 34px;
+        }
+
+        .cell-block {
+            width: 26px;
+            height: 26px;
+            border-radius: 4px;
+            margin: 0 auto;
+            cursor: pointer;
+            transition: transform 0.1s ease, box-shadow 0.15s ease;
+            position: relative;
+        }
+
+        .cell-block:hover {
+            transform: scale(1.35);
+            z-index: 6;
+        }
+
+        .cell-block.match {
+            background: var(--cell-match-bg);
+            border: 1px solid var(--cell-match-border);
+        }
+
+        .cell-block.match:hover {
+            box-shadow: 0 0 8px var(--cell-match-border);
+        }
+
+        .cell-block.diff {
+            background: var(--cell-diff-bg);
+            border: 1px solid var(--cell-diff-border);
+            box-shadow: 0 0 6px var(--cell-diff-glow);
+        }
+
+        .cell-block.diff:hover {
+            box-shadow: 0 0 12px var(--cell-diff-border), 0 0 20px var(--cell-diff-glow);
+        }
+
+        .cell-block.missing {
+            background: var(--cell-missing-bg);
+            border: 1px solid var(--cell-missing-border);
+            opacity: 0.6;
+        }
+
+        /* Deviation count */
+        .drift-value {
+            text-align: center;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            font-weight: 500;
+            padding: 5px 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .drift-value.high { color: var(--cell-diff-text); }
+        .drift-value.medium { color: var(--text-secondary); }
+        .drift-value.zero { color: var(--text-muted); opacity: 0.3; }
+
+        .matrix-row:last-child .setting-name,
+        .matrix-row:last-child .matrix-cell,
+        .matrix-row:last-child .drift-value { border-bottom: none; }
+
+        /* === Tooltip === */
+        .matrix-tooltip {
+            position: fixed;
+            z-index: 1000;
+            padding: 10px 14px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            pointer-events: none;
+            font-size: 12px;
+            max-width: 340px;
+            opacity: 0;
+            transition: opacity 0.12s;
+        }
+
+        .matrix-tooltip.visible { opacity: 1; }
+
+        .tip-label {
+            font-size: 9px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 1px;
+        }
+
+        .tip-value {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-primary);
+            word-break: break-all;
+            margin-bottom: 8px;
+        }
+
+        .tip-value.diff-highlight { color: var(--cell-diff-text); }
+
+        .tip-divider {
+            height: 1px;
+            background: var(--border);
+            margin: 6px 0;
+        }
+
+        .tip-baseline {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .tip-baseline em {
+            color: var(--cell-match-text);
+            font-style: normal;
+            font-family: var(--font-mono);
+        }
+
+        /* === Legend === */
+        .legend {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            padding: 12px 0;
+            margin-top: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .legend-swatch {
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+        }
+
+        .legend-swatch.match {
+            background: var(--cell-match-bg);
+            border: 1px solid var(--cell-match-border);
+        }
+
+        .legend-swatch.diff {
+            background: var(--cell-diff-bg);
+            border: 1px solid var(--cell-diff-border);
+        }
+
+        .legend-swatch.missing {
+            background: var(--cell-missing-bg);
+            border: 1px solid var(--cell-missing-border);
+        }
+
+        /* === Empty State === */
+        .empty-state {
+            text-align: center;
+            padding: 72px 40px;
+            color: var(--text-muted);
+        }
+
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 14px;
+            opacity: 0.25;
+            line-height: 1;
+        }
+
+        .empty-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        .empty-subtitle {
+            font-size: 12px;
+            max-width: 380px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        /* === Scan Animation === */
+        .matrix-scroll.scanning::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent 0%, var(--accent) 30%, var(--accent-secondary) 70%, transparent 100%);
+            box-shadow: 0 0 12px var(--accent-secondary), 0 0 30px var(--accent);
+            z-index: 10;
+            animation: scan-sweep 1.2s ease-out forwards;
+            pointer-events: none;
+        }
+
+        @keyframes scan-sweep {
+            0% { top: 130px; opacity: 1; }
+            85% { opacity: 0.8; }
+            100% { top: 100%; opacity: 0; }
+        }
+
+        .matrix-row {
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
+
+        .matrix-row.revealed { opacity: 1; }
+
+        /* Diff cells pulse after scan */
+        @keyframes amber-pulse {
+            0%, 100% { box-shadow: 0 0 6px var(--cell-diff-glow); }
+            50% { box-shadow: 0 0 12px var(--cell-diff-border), 0 0 20px var(--cell-diff-glow); }
+        }
+
+        .matrix-row.revealed .cell-block.diff {
+            animation: amber-pulse 0.8s ease-in-out 0.3s 2;
+        }
+
+        /* === Responsive === */
+        @media (max-width: 768px) {
+            .container { padding: 12px; }
+            .controls-bar { gap: 8px; }
+            .filter-input { width: 140px; }
+            .picker-panel { width: calc(100vw - 24px); left: -12px; }
+            .summary-bar { gap: 16px; flex-wrap: wrap; }
+            .summary-stat .stat-value { font-size: 18px; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav">
+        <a href="/" class="nav-brand">Cockroach Database Settings Auditor</a>
+        <ul class="nav-links">
+            <li><a href="/">Dashboard</a></li>
+            <li><a href="/history">History</a></li>
+            <li><a href="/compare">Compare</a></li>
+            <li><a href="/fleet" class="active">Fleet</a></li>
+        </ul>
+        <div class="nav-right">
+            <button id="themeToggle" class="theme-toggle" title="Toggle theme">
+                <span class="icon-sun">&#9788;</span>
+                <span class="icon-moon">&#9790;</span>
+            </button>
+            <form method="POST" action="/logout" style="margin:0;padding:0;display:inline;">
+                <button type="submit" class="logout-btn">Logout</button>
+            </form>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="page-header">
+            <h1 class="page-title">Fleet Comparison</h1>
+            <p class="page-subtitle">Multi-cluster configuration drift analysis</p>
+        </div>
+
+        <div class="controls-bar">
+            <div class="control-group">
+                <span class="control-label">Clusters</span>
+                <div class="cluster-picker" id="clusterPicker">
+                    <button class="picker-trigger" id="pickerTrigger">
+                        <span class="picker-label">Select clusters...</span>
+                        <span class="picker-count hidden" id="pickerCountBadge">0</span>
+                        <span class="picker-arrow">&#9662;</span>
+                    </button>
+                    <div class="picker-panel hidden" id="pickerPanel">
+                        <div class="picker-header">
+                            <input type="text" class="picker-search" id="pickerSearch" placeholder="Filter clusters...">
+                            <button class="btn-link" id="btnSelectAll">All</button>
+                            <button class="btn-link" id="btnSelectNone">None</button>
+                        </div>
+                        <div class="picker-list" id="pickerList"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="control-divider"></div>
+
+            <div class="control-group">
+                <span class="control-label">Baseline</span>
+                <select class="select-input" id="baselineMode">
+                    <option value="auto">Auto (most common)</option>
+                    <option value="reference">Reference cluster</option>
+                </select>
+                <select class="select-input hidden" id="referenceSelect">
+                    <option value="">Choose reference...</option>
+                </select>
+            </div>
+
+            <div class="control-divider"></div>
+
+            <div class="control-group">
+                <input type="text" class="filter-input" id="settingFilter" placeholder="Filter settings...">
+            </div>
+
+            <div class="control-group">
+                <button class="toggle-btn" id="diffsOnlyBtn">Diffs only</button>
+            </div>
+
+            <div class="control-group">
+                <button class="toggle-btn" id="sortBtn" data-sort="deviation">Sort: drift</button>
+            </div>
+        </div>
+
+        <div class="summary-bar" id="summaryBar">
+            <div class="summary-stat">
+                <div class="stat-value" id="statClusters">0</div>
+                <div class="stat-label">Clusters</div>
+            </div>
+            <div class="summary-stat">
+                <div class="stat-value" id="statSettings">0</div>
+                <div class="stat-label">Settings</div>
+            </div>
+            <div class="summary-stat">
+                <div class="stat-value warn" id="statDrifts">0</div>
+                <div class="stat-label">With drift</div>
+            </div>
+            <div class="summary-stat">
+                <div class="stat-value" id="statMostDivergent">-</div>
+                <div class="stat-label">Most divergent</div>
+            </div>
+        </div>
+
+        <div id="matrixContainer">
+            <div class="empty-state">
+                <div class="empty-icon">&#9673;</div>
+                <div class="empty-title">Select clusters to begin</div>
+                <div class="empty-subtitle">Choose two or more clusters from the picker above to analyze configuration drift across your fleet.</div>
+            </div>
+        </div>
+
+        <div class="legend" id="legend" style="display: none;">
+            <div class="legend-item"><span class="legend-swatch match"></span> Matches baseline</div>
+            <div class="legend-item"><span class="legend-swatch diff"></span> Differs from baseline</div>
+            <div class="legend-item"><span class="legend-swatch missing"></span> Not present</div>
+        </div>
+    </div>
+
+    <div class="matrix-tooltip" id="matrixTooltip"></div>
+
+    <script nonce="{{.Nonce}}">
+    (function() {
+        'use strict';
+
+        // === Mock Data (used when API is unavailable) ===
+        var MOCK_CLUSTERS = [
+            {id:'prod-us-east-1',name:'prod-us-east-1'},{id:'prod-us-west-2',name:'prod-us-west-2'},
+            {id:'prod-eu-west-1',name:'prod-eu-west-1'},{id:'prod-eu-central-1',name:'prod-eu-central-1'},
+            {id:'prod-ap-southeast-1',name:'prod-ap-southeast-1'},{id:'prod-ap-northeast-1',name:'prod-ap-northeast-1'},
+            {id:'staging-us-east-1',name:'staging-us-east-1'},{id:'staging-eu-west-1',name:'staging-eu-west-1'},
+            {id:'dev-us-east-1',name:'dev-us-east-1'},{id:'dev-eu-west-1',name:'dev-eu-west-1'},
+            {id:'perf-us-east-1',name:'perf-us-east-1'},{id:'dr-us-west-2',name:'dr-us-west-2'},
+            {id:'canary-us-east-1',name:'canary-us-east-1'},{id:'prod-sa-east-1',name:'prod-sa-east-1'},
+            {id:'prod-me-south-1',name:'prod-me-south-1'}
+        ];
+
+        var BASE_SETTINGS = {
+            'admission.kv.enabled': {v:'true',d:'Enable KV admission control'},
+            'admission.sql_kv_response.enabled': {v:'true',d:'Enable SQL KV response admission control'},
+            'bulkio.backup.merge_file_buffer_size': {v:'128 MiB',d:'Buffer size for merging backup files'},
+            'changefeed.backfill.concurrent_scan_requests': {v:'0',d:'Number of concurrent scan requests per changefeed'},
+            'diagnostics.reporting.enabled': {v:'true',d:'Enable diagnostic reporting to Cockroach Labs'},
+            'jobs.retention_time': {v:'336h0m0s',d:'Duration for which completed jobs are retained'},
+            'kv.allocator.load_based_rebalancing': {v:'leases and replicas',d:'Load-based rebalancing mode'},
+            'kv.bulk_io_write.max_rate': {v:'1.0 TiB',d:'Rate limit for bulk IO writes'},
+            'kv.closed_timestamp.target_duration': {v:'3s',d:'Target closed timestamp lag'},
+            'kv.range_merge.queue_enabled': {v:'true',d:'Enable automatic range merging'},
+            'kv.rangefeed.enabled': {v:'true',d:'Enable rangefeeds for change data capture'},
+            'kv.snapshot_rebalance.max_rate': {v:'8.0 MiB',d:'Rate limit for rebalance snapshots'},
+            'kv.transaction.max_intents_bytes': {v:'4194304',d:'Max bytes used for intent tracking'},
+            'server.eventlog.enabled': {v:'true',d:'Enable event logging to system.eventlog'},
+            'server.max_connections_per_gateway': {v:'-1',d:'Max SQL connections per gateway (-1 = unlimited)'},
+            'server.shutdown.drain_wait': {v:'0s',d:'Wait time before starting to drain connections'},
+            'server.time_until_store_dead': {v:'5m0s',d:'Time after which a store is considered dead'},
+            'server.web_session_timeout': {v:'168h0m0s',d:'Web UI session timeout'},
+            'sql.defaults.distsql': {v:'auto',d:'Default distributed SQL execution mode'},
+            'sql.defaults.idle_in_transaction_session_timeout': {v:'0s',d:'Timeout for idle transactions'},
+            'sql.defaults.lock_timeout': {v:'0s',d:'Default lock acquisition timeout'},
+            'sql.defaults.results_buffer.size': {v:'16384',d:'Default results buffer size'},
+            'sql.defaults.serial_normalization': {v:'rowid',d:'Default serial column normalization mode'},
+            'sql.defaults.statement_timeout': {v:'0s',d:'Default statement timeout'},
+            'sql.log.slow_query.latency_threshold': {v:'0s',d:'Latency threshold for slow query logging'},
+            'sql.spatial.experimental_box2d_comparison_operators.enabled': {v:'false',d:'Enable experimental box2d operators'},
+            'sql.stats.automatic_collection.enabled': {v:'true',d:'Automatic table statistics collection'},
+            'sql.trace.txn.enable_threshold': {v:'0s',d:'Transaction tracing threshold'},
+            'sql.txn.read_committed_isolation.enabled': {v:'false',d:'Enable Read Committed isolation level'},
+            'timeseries.storage.resolution_10s.ttl': {v:'240h0m0s',d:'TTL for 10s resolution time series data'}
+        };
+
+        var OVERRIDES = {
+            'dev-us-east-1': {
+                'sql.defaults.statement_timeout':'30s','sql.log.slow_query.latency_threshold':'100ms',
+                'server.time_until_store_dead':'10m0s','diagnostics.reporting.enabled':'false',
+                'sql.trace.txn.enable_threshold':'100ms'
+            },
+            'dev-eu-west-1': {
+                'sql.defaults.statement_timeout':'30s','sql.log.slow_query.latency_threshold':'100ms',
+                'diagnostics.reporting.enabled':'false'
+            },
+            'staging-us-east-1': {
+                'sql.log.slow_query.latency_threshold':'50ms','sql.defaults.distsql':'always',
+                'sql.txn.read_committed_isolation.enabled':'true'
+            },
+            'staging-eu-west-1': {
+                'sql.log.slow_query.latency_threshold':'50ms',
+                'sql.txn.read_committed_isolation.enabled':'true'
+            },
+            'canary-us-east-1': {
+                'sql.txn.read_committed_isolation.enabled':'true',
+                'sql.spatial.experimental_box2d_comparison_operators.enabled':'true',
+                'sql.defaults.distsql':'always','kv.closed_timestamp.target_duration':'1s'
+            },
+            'perf-us-east-1': {
+                'kv.snapshot_rebalance.max_rate':'32.0 MiB','kv.bulk_io_write.max_rate':'4.0 TiB',
+                'bulkio.backup.merge_file_buffer_size':'512 MiB',
+                'timeseries.storage.resolution_10s.ttl':'72h0m0s',
+                'server.max_connections_per_gateway':'500'
+            },
+            'prod-eu-central-1': {
+                'server.time_until_store_dead':'3m0s','kv.snapshot_rebalance.max_rate':'4.0 MiB'
+            },
+            'dr-us-west-2': {
+                'jobs.retention_time':'72h0m0s','changefeed.backfill.concurrent_scan_requests':'4',
+                'server.web_session_timeout':'24h0m0s'
+            }
+        };
+
+        function generateMockSettings(clusterId) {
+            var settings = {};
+            for (var key in BASE_SETTINGS) {
+                var base = BASE_SETTINGS[key];
+                var over = OVERRIDES[clusterId];
+                settings[key] = { value: (over && over[key]) || base.v, description: base.d };
+            }
+            return settings;
+        }
+
+        // === State ===
+        var state = {
+            allClusters: [],
+            selected: [],
+            clusterData: {},
+            baselineMode: 'auto',
+            referenceCluster: null,
+            settingFilter: '',
+            diffsOnly: false,
+            sortBy: 'deviation',
+            pickerOpen: false,
+            loading: false
+        };
+
+        // === DOM refs ===
+        var dom = {
+            pickerTrigger: document.getElementById('pickerTrigger'),
+            pickerPanel: document.getElementById('pickerPanel'),
+            pickerList: document.getElementById('pickerList'),
+            pickerSearch: document.getElementById('pickerSearch'),
+            pickerCountBadge: document.getElementById('pickerCountBadge'),
+            baselineMode: document.getElementById('baselineMode'),
+            referenceSelect: document.getElementById('referenceSelect'),
+            settingFilter: document.getElementById('settingFilter'),
+            diffsOnlyBtn: document.getElementById('diffsOnlyBtn'),
+            sortBtn: document.getElementById('sortBtn'),
+            matrixContainer: document.getElementById('matrixContainer'),
+            tooltip: document.getElementById('matrixTooltip'),
+            legend: document.getElementById('legend'),
+            statClusters: document.getElementById('statClusters'),
+            statSettings: document.getElementById('statSettings'),
+            statDrifts: document.getElementById('statDrifts'),
+            statMostDivergent: document.getElementById('statMostDivergent')
+        };
+
+        // === Utility ===
+        function esc(str) {
+            if (!str) return '';
+            var d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        function getClusterName(id) {
+            for (var i = 0; i < state.allClusters.length; i++) {
+                if (state.allClusters[i].id === id) return state.allClusters[i].name;
+            }
+            return id;
+        }
+
+        // === Data Loading ===
+        async function loadClusters() {
+            try {
+                var resp = await fetch('/api/clusters');
+                if (resp.ok) {
+                    var data = await resp.json();
+                    if (data && data.length) return data;
+                }
+            } catch (e) { /* fallback to mock */ }
+            return MOCK_CLUSTERS;
+        }
+
+        async function loadClusterSettings(clusterId) {
+            try {
+                var resp = await fetch('/api/cluster-settings?cluster=' + encodeURIComponent(clusterId));
+                if (resp.ok) return await resp.json();
+            } catch (e) { /* fallback to mock */ }
+            return generateMockSettings(clusterId);
+        }
+
+        async function ensureClusterData(clusterIds) {
+            var promises = [];
+            for (var i = 0; i < clusterIds.length; i++) {
+                var cid = clusterIds[i];
+                if (!state.clusterData[cid]) {
+                    promises.push((async function(id) {
+                        state.clusterData[id] = await loadClusterSettings(id);
+                    })(cid));
+                }
+            }
+            if (promises.length) await Promise.all(promises);
+        }
+
+        // === Matrix Computation ===
+        function computeMatrix() {
+            if (state.selected.length < 2) return [];
+
+            var allSettings = {};
+            for (var i = 0; i < state.selected.length; i++) {
+                var cid = state.selected[i];
+                var data = state.clusterData[cid] || {};
+                for (var key in data) allSettings[key] = true;
+            }
+
+            var matrix = [];
+            for (var setting in allSettings) {
+                var valueCounts = {};
+                var desc = '';
+
+                for (var j = 0; j < state.selected.length; j++) {
+                    var cd = state.clusterData[state.selected[j]] || {};
+                    var s = cd[setting];
+                    if (s) {
+                        var v = s.value;
+                        valueCounts[v] = (valueCounts[v] || 0) + 1;
+                        if (!desc && s.description) desc = s.description;
+                    }
+                }
+
+                var baselineValue;
+                if (state.baselineMode === 'reference' && state.referenceCluster) {
+                    var refData = state.clusterData[state.referenceCluster];
+                    baselineValue = refData && refData[setting] ? refData[setting].value : undefined;
+                } else {
+                    var maxCount = 0;
+                    for (var val in valueCounts) {
+                        if (valueCounts[val] > maxCount) { maxCount = valueCounts[val]; baselineValue = val; }
+                    }
+                }
+
+                var cells = {};
+                var deviationCount = 0;
+                for (var k = 0; k < state.selected.length; k++) {
+                    var cid2 = state.selected[k];
+                    var cd2 = state.clusterData[cid2] || {};
+                    var s2 = cd2[setting];
+                    if (!s2) {
+                        cells[cid2] = { status: 'missing', value: null };
+                        deviationCount++;
+                    } else if (s2.value === baselineValue) {
+                        cells[cid2] = { status: 'match', value: s2.value };
+                    } else {
+                        cells[cid2] = { status: 'diff', value: s2.value };
+                        deviationCount++;
+                    }
+                }
+
+                matrix.push({
+                    setting: setting,
+                    baselineValue: baselineValue,
+                    deviationCount: deviationCount,
+                    cells: cells,
+                    description: desc
+                });
+            }
+
+            // Filter
+            if (state.settingFilter) {
+                var f = state.settingFilter.toLowerCase();
+                matrix = matrix.filter(function(row) { return row.setting.toLowerCase().indexOf(f) !== -1; });
+            }
+            if (state.diffsOnly) {
+                matrix = matrix.filter(function(row) { return row.deviationCount > 0; });
+            }
+
+            // Sort
+            if (state.sortBy === 'deviation') {
+                matrix.sort(function(a, b) {
+                    return b.deviationCount - a.deviationCount || a.setting.localeCompare(b.setting);
+                });
+            } else {
+                matrix.sort(function(a, b) { return a.setting.localeCompare(b.setting); });
+            }
+
+            return matrix;
+        }
+
+        // === Rendering ===
+        function renderMatrix() {
+            var matrix = computeMatrix();
+
+            if (state.selected.length < 2) {
+                dom.matrixContainer.innerHTML =
+                    '<div class="empty-state">' +
+                    '<div class="empty-icon">&#9673;</div>' +
+                    '<div class="empty-title">Select clusters to begin</div>' +
+                    '<div class="empty-subtitle">Choose two or more clusters from the picker above to analyze configuration drift across your fleet.</div>' +
+                    '</div>';
+                dom.legend.style.display = 'none';
+                updateSummary([], matrix);
+                return;
+            }
+
+            if (matrix.length === 0) {
+                dom.matrixContainer.innerHTML =
+                    '<div class="empty-state">' +
+                    '<div class="empty-icon">&#9711;</div>' +
+                    '<div class="empty-title">No settings match</div>' +
+                    '<div class="empty-subtitle">Try adjusting filters or selecting different clusters.</div>' +
+                    '</div>';
+                dom.legend.style.display = 'flex';
+                updateSummary(state.selected, []);
+                return;
+            }
+
+            var html = '<div class="matrix-outer"><div class="matrix-scroll" id="matrixScroll">';
+            html += '<table class="matrix-table"><thead><tr>';
+            html += '<th class="col-setting">Setting</th>';
+
+            for (var i = 0; i < state.selected.length; i++) {
+                var name = getClusterName(state.selected[i]);
+                html += '<th class="cluster-col-header" data-col-idx="' + (i + 1) + '"><div class="cluster-col-header-inner"><span class="cluster-col-text" title="' + esc(name) + '">' + esc(name) + '</span></div></th>';
+            }
+
+            html += '<th class="col-drift">Drift</th>';
+            html += '</tr></thead><tbody>';
+
+            for (var r = 0; r < matrix.length; r++) {
+                var row = matrix[r];
+                html += '<tr class="matrix-row" style="--row-index:' + r + '">';
+                html += '<td class="col-setting setting-name" title="' + esc(row.description) + '">' + esc(row.setting) + '</td>';
+
+                for (var c = 0; c < state.selected.length; c++) {
+                    var cid = state.selected[c];
+                    var cell = row.cells[cid];
+                    html += '<td class="matrix-cell" data-cluster="' + esc(cid) + '" data-setting="' + esc(row.setting) + '" data-value="' + esc(cell.value || '') + '" data-baseline="' + esc(row.baselineValue || '') + '" data-status="' + cell.status + '" data-col-idx="' + (c + 1) + '">';
+                    html += '<div class="cell-block ' + cell.status + '"></div>';
+                    html += '</td>';
+                }
+
+                var driftCls = row.deviationCount === 0 ? 'zero' : row.deviationCount >= 3 ? 'high' : 'medium';
+                html += '<td class="col-drift drift-value ' + driftCls + '">' + row.deviationCount + '</td>';
+                html += '</tr>';
+            }
+
+            html += '</tbody></table></div></div>';
+            dom.matrixContainer.innerHTML = html;
+            dom.legend.style.display = 'flex';
+            updateSummary(state.selected, matrix);
+            triggerScan();
+        }
+
+        function updateSummary(clusters, matrix) {
+            dom.statClusters.textContent = clusters.length;
+            dom.statSettings.textContent = matrix.length;
+
+            var driftCount = 0;
+            var clusterDrifts = {};
+            for (var i = 0; i < clusters.length; i++) clusterDrifts[clusters[i]] = 0;
+
+            for (var r = 0; r < matrix.length; r++) {
+                if (matrix[r].deviationCount > 0) driftCount++;
+                for (var c = 0; c < clusters.length; c++) {
+                    var cell = matrix[r].cells[clusters[c]];
+                    if (cell && cell.status !== 'match') clusterDrifts[clusters[c]]++;
+                }
+            }
+
+            dom.statDrifts.textContent = driftCount;
+
+            var mostDivName = '-';
+            var mostDivCount = 0;
+            for (var cid in clusterDrifts) {
+                if (clusterDrifts[cid] > mostDivCount) {
+                    mostDivCount = clusterDrifts[cid];
+                    mostDivName = getClusterName(cid);
+                }
+            }
+            dom.statMostDivergent.textContent = mostDivCount > 0 ? mostDivName : '-';
+            dom.statMostDivergent.style.fontSize = mostDivName.length > 16 ? '13px' : '';
+        }
+
+        // === Scan Animation ===
+        function triggerScan() {
+            var scroll = document.getElementById('matrixScroll');
+            if (!scroll) return;
+
+            scroll.classList.add('scanning');
+            var rows = scroll.querySelectorAll('.matrix-row');
+            var duration = Math.min(1200, rows.length * 12);
+            var interval = rows.length > 0 ? duration / rows.length : 0;
+
+            for (var i = 0; i < rows.length; i++) {
+                (function(row, delay) {
+                    setTimeout(function() { row.classList.add('revealed'); }, delay);
+                })(rows[i], i * interval);
+            }
+
+            setTimeout(function() { scroll.classList.remove('scanning'); }, duration + 200);
+        }
+
+        // === Cluster Picker ===
+        function renderPicker() {
+            var search = dom.pickerSearch.value.toLowerCase();
+            var html = '';
+            for (var i = 0; i < state.allClusters.length; i++) {
+                var cl = state.allClusters[i];
+                if (search && cl.name.toLowerCase().indexOf(search) === -1) continue;
+                var sel = state.selected.indexOf(cl.id) !== -1;
+                html += '<div class="picker-item' + (sel ? ' selected' : '') + '" data-id="' + esc(cl.id) + '">';
+                html += '<span class="picker-check">' + (sel ? '&#10003;' : '') + '</span>';
+                html += '<span>' + esc(cl.name) + '</span>';
+                html += '</div>';
+            }
+            dom.pickerList.innerHTML = html;
+        }
+
+        function updatePickerTrigger() {
+            var label = dom.pickerTrigger.querySelector('.picker-label');
+            var badge = dom.pickerCountBadge;
+            if (state.selected.length === 0) {
+                label.textContent = 'Select clusters...';
+                badge.classList.add('hidden');
+            } else {
+                label.textContent = state.selected.length + ' cluster' + (state.selected.length === 1 ? '' : 's');
+                badge.textContent = state.selected.length;
+                badge.classList.remove('hidden');
+            }
+        }
+
+        function updateReferenceSelect() {
+            var html = '<option value="">Choose reference...</option>';
+            for (var i = 0; i < state.selected.length; i++) {
+                var cid = state.selected[i];
+                html += '<option value="' + esc(cid) + '">' + esc(getClusterName(cid)) + '</option>';
+            }
+            dom.referenceSelect.innerHTML = html;
+            if (state.referenceCluster && state.selected.indexOf(state.referenceCluster) !== -1) {
+                dom.referenceSelect.value = state.referenceCluster;
+            }
+        }
+
+        function togglePicker() {
+            state.pickerOpen = !state.pickerOpen;
+            dom.pickerPanel.classList.toggle('hidden', !state.pickerOpen);
+            dom.pickerTrigger.classList.toggle('open', state.pickerOpen);
+            if (state.pickerOpen) {
+                dom.pickerSearch.value = '';
+                renderPicker();
+                dom.pickerSearch.focus();
+            }
+        }
+
+        // === Tooltip ===
+        var highlightedHeader = null;
+
+        function showTooltip(cell, e) {
+            var cluster = cell.dataset.cluster;
+            var setting = cell.dataset.setting;
+            var value = cell.dataset.value;
+            var baseline = cell.dataset.baseline;
+            var status = cell.dataset.status;
+
+            var html = '<div class="tip-label">Cluster</div>';
+            html += '<div class="tip-value">' + esc(getClusterName(cluster)) + '</div>';
+            html += '<div class="tip-label">Setting</div>';
+            html += '<div class="tip-value">' + esc(setting) + '</div>';
+            html += '<div class="tip-divider"></div>';
+            html += '<div class="tip-label">Value</div>';
+
+            if (status === 'missing') {
+                html += '<div class="tip-value" style="color:var(--text-muted);font-style:italic;">not present</div>';
+            } else {
+                html += '<div class="tip-value' + (status === 'diff' ? ' diff-highlight' : '') + '">' + esc(value) + '</div>';
+            }
+
+            if (status === 'diff' && baseline) {
+                html += '<div class="tip-label">Baseline</div>';
+                html += '<div class="tip-baseline"><em>' + esc(baseline) + '</em></div>';
+            }
+
+            dom.tooltip.innerHTML = html;
+
+            var rect = cell.getBoundingClientRect();
+            var tx = rect.left + rect.width / 2;
+            var ty = rect.top - 6;
+
+            dom.tooltip.style.left = tx + 'px';
+            dom.tooltip.style.top = ty + 'px';
+            dom.tooltip.style.transform = 'translate(-50%, -100%)';
+
+            // Keep on screen
+            dom.tooltip.classList.add('visible');
+            var tipRect = dom.tooltip.getBoundingClientRect();
+            if (tipRect.left < 8) dom.tooltip.style.left = (8 + tipRect.width / 2) + 'px';
+            if (tipRect.right > window.innerWidth - 8) dom.tooltip.style.left = (window.innerWidth - 8 - tipRect.width / 2) + 'px';
+            if (tipRect.top < 8) {
+                dom.tooltip.style.top = (rect.bottom + 6) + 'px';
+                dom.tooltip.style.transform = 'translate(-50%, 0)';
+            }
+        }
+
+        function hideTooltip() {
+            dom.tooltip.classList.remove('visible');
+        }
+
+        // === Event Listeners ===
+
+        // Picker toggle
+        dom.pickerTrigger.addEventListener('click', function(e) {
+            e.stopPropagation();
+            togglePicker();
+        });
+
+        // Close picker on outside click
+        document.addEventListener('click', function(e) {
+            if (state.pickerOpen && !e.target.closest('#clusterPicker')) {
+                state.pickerOpen = false;
+                dom.pickerPanel.classList.add('hidden');
+                dom.pickerTrigger.classList.remove('open');
+            }
+        });
+
+        // Picker search
+        dom.pickerSearch.addEventListener('input', renderPicker);
+
+        // Picker item click (event delegation)
+        dom.pickerList.addEventListener('click', function(e) {
+            var item = e.target.closest('.picker-item');
+            if (!item) return;
+            var id = item.dataset.id;
+            var idx = state.selected.indexOf(id);
+            if (idx === -1) {
+                state.selected.push(id);
+            } else {
+                state.selected.splice(idx, 1);
+            }
+            renderPicker();
+            updatePickerTrigger();
+            updateReferenceSelect();
+            loadAndRender();
+        });
+
+        // Select all / none
+        document.getElementById('btnSelectAll').addEventListener('click', function() {
+            state.selected = state.allClusters.map(function(c) { return c.id; });
+            renderPicker();
+            updatePickerTrigger();
+            updateReferenceSelect();
+            loadAndRender();
+        });
+
+        document.getElementById('btnSelectNone').addEventListener('click', function() {
+            state.selected = [];
+            renderPicker();
+            updatePickerTrigger();
+            updateReferenceSelect();
+            renderMatrix();
+        });
+
+        // Baseline mode
+        dom.baselineMode.addEventListener('change', function() {
+            state.baselineMode = this.value;
+            dom.referenceSelect.classList.toggle('hidden', this.value !== 'reference');
+            renderMatrix();
+        });
+
+        dom.referenceSelect.addEventListener('change', function() {
+            state.referenceCluster = this.value || null;
+            renderMatrix();
+        });
+
+        // Filter
+        var filterTimeout;
+        dom.settingFilter.addEventListener('input', function() {
+            clearTimeout(filterTimeout);
+            var self = this;
+            filterTimeout = setTimeout(function() {
+                state.settingFilter = self.value;
+                renderMatrix();
+            }, 150);
+        });
+
+        // Diffs only toggle
+        dom.diffsOnlyBtn.addEventListener('click', function() {
+            state.diffsOnly = !state.diffsOnly;
+            this.classList.toggle('active', state.diffsOnly);
+            renderMatrix();
+        });
+
+        // Sort toggle
+        dom.sortBtn.addEventListener('click', function() {
+            state.sortBy = state.sortBy === 'deviation' ? 'name' : 'deviation';
+            this.textContent = 'Sort: ' + (state.sortBy === 'deviation' ? 'drift' : 'name');
+            renderMatrix();
+        });
+
+        // Tooltip (event delegation on matrix)
+        dom.matrixContainer.addEventListener('mouseover', function(e) {
+            var cell = e.target.closest('.matrix-cell');
+            if (cell) {
+                showTooltip(cell, e);
+                // Highlight column header
+                var colIdx = cell.dataset.colIdx;
+                var header = dom.matrixContainer.querySelector('th[data-col-idx="' + colIdx + '"]');
+                if (highlightedHeader) highlightedHeader.classList.remove('col-highlight');
+                if (header) { header.classList.add('col-highlight'); highlightedHeader = header; }
+            }
+        });
+
+        dom.matrixContainer.addEventListener('mouseout', function(e) {
+            var cell = e.target.closest('.matrix-cell');
+            if (cell) {
+                hideTooltip();
+                if (highlightedHeader) { highlightedHeader.classList.remove('col-highlight'); highlightedHeader = null; }
+            }
+        });
+
+        // Theme toggle
+        document.getElementById('themeToggle').addEventListener('click', function() {
+            var current = document.documentElement.getAttribute('data-theme');
+            var next = current === 'light' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('theme', next);
+        });
+
+        // === Load & Render ===
+        async function loadAndRender() {
+            if (state.selected.length < 2) {
+                renderMatrix();
+                return;
+            }
+            await ensureClusterData(state.selected);
+            renderMatrix();
+        }
+
+        // === Init ===
+        async function init() {
+            state.allClusters = await loadClusters();
+            renderPicker();
+            updatePickerTrigger();
+        }
+
+        init();
+    })();
+    </script>
+</body>
+</html>
