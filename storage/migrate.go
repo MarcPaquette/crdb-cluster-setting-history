@@ -423,6 +423,17 @@ func logDatabaseInfo(ctx context.Context, pool *pgxpool.Pool) {
 	}
 }
 
+// Migrate connects to the given database and runs all pending schema migrations.
+// This is used by the init command to create tables as part of initialization.
+func Migrate(ctx context.Context, connString string) error {
+	pool, err := pgxpool.New(ctx, connString)
+	if err != nil {
+		return fmt.Errorf("connecting for migration: %w", err)
+	}
+	defer pool.Close()
+	return initAndMigrate(ctx, pool)
+}
+
 // initAndMigrate creates the migration tracking table, handles existing databases,
 // then runs any pending migrations.
 func initAndMigrate(ctx context.Context, pool *pgxpool.Pool) error {
