@@ -123,6 +123,110 @@ func TestFullIntegration(t *testing.T) {
 	}
 }
 
+// TestFreshMigrationCompletes verifies that init + migration on a fresh database
+// finishes within a tight timeout, catching any DDL hang regressions.
+func TestFreshMigrationCompletes(t *testing.T) {
+	sourceURL := os.Getenv("DATABASE_URL")
+	if sourceURL == "" {
+		t.Skip("DATABASE_URL not set, skipping migration test")
+	}
+
+	historyAdminURL := os.Getenv("HISTORY_ADMIN_URL")
+	if historyAdminURL == "" {
+		historyAdminURL = sourceURL
+	}
+
+	// Tight timeout — fresh migration should complete in seconds, not minutes.
+	// If this test hangs, it means DDL contention has regressed.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dbName := "cluster_history_migration_test"
+	username := "history_migration_user"
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+
+		conn, err := pgx.Connect(cleanupCtx, historyAdminURL)
+		if err != nil {
+			t.Logf("Cleanup: failed to connect: %v", err)
+			return
+		}
+		defer conn.Close(cleanupCtx)
+
+		conn.Exec(cleanupCtx, "DROP DATABASE IF EXISTS "+pgx.Identifier{dbName}.Sanitize()+" CASCADE")
+		conn.Exec(cleanupCtx, "ALTER DEFAULT PRIVILEGES FOR ROLE root REVOKE ALL ON TABLES FROM "+pgx.Identifier{username}.Sanitize())
+		conn.Exec(cleanupCtx, "DROP USER IF EXISTS "+pgx.Identifier{username}.Sanitize())
+	})
+
+	// Step 1: Init creates the database, user, and grants.
+	t.Log("Step 1: Running init on fresh database...")
+	initStart := time.Now()
+	initCfg := cmd.InitConfig{
+		AdminURL:     historyAdminURL,
+		DatabaseName: dbName,
+		Username:     username,
+		Password:     "",
+	}
+	if err := cmd.RunInit(ctx, initCfg); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	t.Logf("Init completed in %v", time.Since(initStart))
+
+	// Step 2: storage.New triggers initAndMigrate — the step that previously hung.
+	t.Log("Step 2: Connecting via storage.New (triggers migration)...")
+	migrateStart := time.Now()
+	historyURL := replaceDBUserAndName(historyAdminURL, username, dbName)
+	store, err := storage.New(ctx, historyURL)
+	if err != nil {
+		t.Fatalf("storage.New failed (migration hang?): %v", err)
+	}
+	defer store.Close()
+	t.Logf("Migration completed in %v", time.Since(migrateStart))
+
+	// Step 3: Verify all expected tables exist.
+	t.Log("Step 3: Verifying all tables were created...")
+	conn, err := pgx.Connect(ctx, historyURL)
+	if err != nil {
+		t.Fatalf("Failed to connect to verify tables: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	expectedTables := []string{
+		"schema_migrations",
+		"snapshots",
+		"settings",
+		"changes",
+		"metadata",
+		"annotations",
+	}
+	for _, table := range expectedTables {
+		var exists bool
+		err := conn.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
+			table,
+		).Scan(&exists)
+		if err != nil {
+			t.Fatalf("Failed to check table %s: %v", table, err)
+		}
+		if !exists {
+			t.Errorf("Expected table %s to exist after migration", table)
+		}
+	}
+
+	// Step 4: Verify migration version is current.
+	var maxVersion int
+	err = conn.QueryRow(ctx, "SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&maxVersion)
+	if err != nil {
+		t.Fatalf("Failed to read migration version: %v", err)
+	}
+	if maxVersion != 6 {
+		t.Errorf("Expected migration version 6, got %d", maxVersion)
+	}
+	t.Logf("Migration version: %d", maxVersion)
+}
+
 // replaceDBUserAndName builds a connection URL from an admin URL by replacing
 // the username and database name, preserving the host, port, and query params.
 func replaceDBUserAndName(adminURL, user, dbName string) string {
