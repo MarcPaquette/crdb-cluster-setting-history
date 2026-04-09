@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -18,14 +20,25 @@ type migration struct {
 // migrations is the ordered list of all schema migrations.
 // Each migration must be idempotent (use IF NOT EXISTS, ADD COLUMN IF NOT EXISTS, etc.)
 // to safely handle concurrent execution across multiple replicas.
+//
+// Migration 1 creates the full current schema (all columns, indexes, PKs) so
+// that fresh databases need only CREATE TABLE — no slow ALTER TABLE cycles.
+// Migrations 2-6 exist for databases created by older versions; on a fresh
+// database their IF NOT EXISTS / ADD COLUMN IF NOT EXISTS clauses are no-ops.
+//
+// Indexes are defined inline with CREATE TABLE (not as separate CREATE INDEX)
+// to avoid schema change contention on CockroachDB, where a separate DDL
+// statement triggers another multi-phase schema change lifecycle.
 var migrations = []migration{
 	{
 		version:     1,
-		description: "create base tables (snapshots, settings, changes, metadata)",
+		description: "create base tables (snapshots, settings, changes, metadata, annotations)",
 		sql: `
 			CREATE TABLE IF NOT EXISTS snapshots (
 				id SERIAL PRIMARY KEY,
-				collected_at TIMESTAMPTZ NOT NULL
+				collected_at TIMESTAMPTZ NOT NULL,
+				cluster_id TEXT NOT NULL DEFAULT 'default',
+				INDEX idx_snapshots_cluster (cluster_id, collected_at DESC)
 			);
 
 			CREATE TABLE IF NOT EXISTS settings (
@@ -34,29 +47,44 @@ var migrations = []migration{
 				variable TEXT NOT NULL,
 				value TEXT NOT NULL,
 				setting_type TEXT,
-				description TEXT
+				description TEXT,
+				INDEX idx_settings_snapshot (snapshot_id)
 			);
-
-			CREATE INDEX IF NOT EXISTS idx_settings_snapshot ON settings(snapshot_id);
 
 			CREATE TABLE IF NOT EXISTS changes (
 				id SERIAL PRIMARY KEY,
 				detected_at TIMESTAMPTZ NOT NULL,
 				variable TEXT NOT NULL,
 				old_value TEXT,
-				new_value TEXT
+				new_value TEXT,
+				description TEXT,
+				version TEXT,
+				cluster_id TEXT NOT NULL DEFAULT 'default',
+				INDEX idx_changes_detected (detected_at DESC),
+				INDEX idx_changes_cluster (cluster_id, detected_at DESC)
 			);
 
-			CREATE INDEX IF NOT EXISTS idx_changes_detected ON changes(detected_at DESC);
-
 			CREATE TABLE IF NOT EXISTS metadata (
-				key TEXT PRIMARY KEY,
+				cluster_id TEXT NOT NULL DEFAULT 'default',
+				key TEXT NOT NULL,
 				value TEXT NOT NULL,
-				updated_at TIMESTAMPTZ NOT NULL
+				updated_at TIMESTAMPTZ NOT NULL,
+				PRIMARY KEY (cluster_id, key)
+			);
+
+			CREATE TABLE IF NOT EXISTS annotations (
+				id SERIAL PRIMARY KEY,
+				change_id INT NOT NULL UNIQUE REFERENCES changes(id) ON DELETE CASCADE,
+				content TEXT NOT NULL,
+				created_by TEXT NOT NULL DEFAULT '',
+				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+				updated_by TEXT,
+				updated_at TIMESTAMPTZ
 			);
 		`,
 	},
 	{
+		// On fresh databases these columns already exist (created in migration 1).
 		version:     2,
 		description: "add description and version columns to changes",
 		sql: `
@@ -65,6 +93,7 @@ var migrations = []migration{
 		`,
 	},
 	{
+		// On fresh databases this table already exists (created in migration 1).
 		version:     3,
 		description: "add annotations table",
 		sql: `
@@ -77,10 +106,10 @@ var migrations = []migration{
 				updated_by TEXT,
 				updated_at TIMESTAMPTZ
 			);
-			CREATE INDEX IF NOT EXISTS idx_annotations_change_id ON annotations(change_id);
 		`,
 	},
 	{
+		// On fresh databases these columns/indexes already exist (created in migration 1).
 		version:     4,
 		description: "add multi-cluster support (cluster_id columns and composite metadata PK)",
 		sql: `
@@ -126,6 +155,8 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		return nil
 	}
 
+	logSchemaChangeJobs(ctx, pool)
+
 	for _, m := range migrations {
 		if m.version <= currentVersion {
 			continue
@@ -142,7 +173,7 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 				return fmt.Errorf("migration %d (%s): %w", m.version, m.description, err)
 			}
 		} else {
-			if _, err := pool.Exec(ctx, m.sql); err != nil {
+			if err := execDDL(ctx, pool, m.sql); err != nil {
 				return fmt.Errorf("migration %d (%s): %w", m.version, m.description, err)
 			}
 		}
@@ -178,8 +209,7 @@ func migrateMetadataPK(ctx context.Context, pool *pgxpool.Pool) error {
 		return nil
 	}
 
-	_, err = pool.Exec(ctx, "ALTER TABLE metadata DROP CONSTRAINT metadata_pkey, ADD PRIMARY KEY (cluster_id, key)")
-	if err != nil && !isConstraintAlreadyExists(err) {
+	if err := execDDL(ctx, pool, "ALTER TABLE metadata DROP CONSTRAINT metadata_pkey, ADD PRIMARY KEY (cluster_id, key)"); err != nil && !isConstraintAlreadyExists(err) {
 		return err
 	}
 
@@ -207,20 +237,203 @@ func dropMetadataKeyUnique(ctx context.Context, pool *pgxpool.Pool) error {
 		return nil
 	}
 
-	_, err = pool.Exec(ctx, "DROP INDEX metadata_key_key CASCADE")
-	return err
+	return execDDL(ctx, pool, "DROP INDEX metadata_key_key CASCADE")
+}
+
+// splitStatements splits multi-statement SQL on semicolons, returning
+// only non-empty, non-comment-only statements.
+func splitStatements(sql string) []string {
+	var stmts []string
+	for _, raw := range strings.Split(sql, ";") {
+		s := strings.TrimSpace(raw)
+		if s == "" || onlyComments(s) {
+			continue
+		}
+		stmts = append(stmts, s)
+	}
+	return stmts
+}
+
+// execDDL executes DDL SQL using the PostgreSQL simple query protocol.
+// Multi-statement SQL is split on semicolons and each statement is executed
+// individually with per-statement logging and a per-statement timeout.
+// Between statements, it waits for any active schema change jobs to complete
+// to avoid contention (CockroachDB serializes schema changes on the same table).
+func execDDL(ctx context.Context, pool *pgxpool.Pool, sql string) error {
+	stmts := splitStatements(sql)
+	if len(stmts) == 0 {
+		return nil
+	}
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring connection: %w", err)
+	}
+	defer conn.Release()
+
+	for i, stmt := range stmts {
+		preview := stmtPreview(stmt)
+		slog.Info("Executing DDL statement", "step", fmt.Sprintf("%d/%d", i+1, len(stmts)), "sql", preview)
+
+		stmtCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		start := time.Now()
+
+		// Use PgConn().Exec() — simple query protocol, no Prepare/Parse step.
+		_, err := conn.Conn().PgConn().Exec(stmtCtx, stmt).ReadAll()
+		elapsed := time.Since(start)
+		cancel()
+
+		if err != nil {
+			slog.Error("DDL statement failed", "sql", preview, "elapsed", elapsed, "error", err)
+			logSchemaChangeJobs(ctx, pool)
+			return fmt.Errorf("executing %q: %w", preview, err)
+		}
+		slog.Info("DDL statement completed", "sql", preview, "elapsed", elapsed)
+
+		// Wait for schema change jobs to finish before the next statement.
+		// CockroachDB serializes schema changes on the same table, so a
+		// CREATE INDEX right after CREATE TABLE will block until the table's
+		// schema change fully propagates through all lease phases.
+		if i < len(stmts)-1 {
+			waitForSchemaChanges(ctx, conn)
+		}
+	}
+	return nil
+}
+
+// waitForSchemaChanges polls until all active schema change jobs complete.
+// CockroachDB v22+ uses the declarative schema changer ("NEW SCHEMA CHANGE")
+// in addition to the legacy "SCHEMA CHANGE" job type — both must be checked.
+func waitForSchemaChanges(ctx context.Context, conn *pgxpool.Conn) {
+	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	for {
+		var count int
+		err := conn.QueryRow(waitCtx,
+			`SELECT count(*) FROM [SHOW JOBS]
+			 WHERE job_type IN ('SCHEMA CHANGE', 'NEW SCHEMA CHANGE')
+			   AND status NOT IN ('succeeded', 'canceled', 'failed')`).Scan(&count)
+		if err != nil || count == 0 {
+			return
+		}
+
+		slog.Info("Waiting for schema change jobs to complete", "active_jobs", count)
+
+		select {
+		case <-waitCtx.Done():
+			slog.Warn("Timed out waiting for schema change jobs", "remaining", count)
+			return
+		case <-time.After(1 * time.Second):
+		}
+	}
+}
+
+// stmtPreview returns the first meaningful line of a SQL statement for logging.
+func stmtPreview(sql string) string {
+	for _, line := range strings.Split(sql, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "--") {
+			if len(line) > 80 {
+				return line[:80] + "..."
+			}
+			return line
+		}
+	}
+	return "(empty)"
+}
+
+// onlyComments returns true if the SQL string contains only -- line comments and whitespace.
+func onlyComments(sql string) bool {
+	for _, line := range strings.Split(sql, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "--") {
+			return false
+		}
+	}
+	return true
+}
+
+// logSchemaChangeJobs queries CockroachDB for running or pending schema change
+// jobs and logs them. This helps diagnose DDL hangs caused by job contention.
+func logSchemaChangeJobs(ctx context.Context, pool *pgxpool.Pool) {
+	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	rows, err := pool.Query(queryCtx,
+		`SELECT job_id, job_type, description, status, running_status, created, modified
+		 FROM [SHOW JOBS]
+		 WHERE job_type IN ('SCHEMA CHANGE', 'NEW SCHEMA CHANGE')
+		   AND status NOT IN ('succeeded', 'canceled', 'failed')
+		 ORDER BY created DESC
+		 LIMIT 10`)
+	if err != nil {
+		slog.Warn("Could not query schema change jobs", "error", err)
+		return
+	}
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var jobID int64
+		var jobType, description, status string
+		var runningStatus *string
+		var created, modified time.Time
+		if err := rows.Scan(&jobID, &jobType, &description, &status, &runningStatus, &created, &modified); err != nil {
+			slog.Warn("Could not scan schema change job row", "error", err)
+			continue
+		}
+		rs := ""
+		if runningStatus != nil {
+			rs = *runningStatus
+		}
+		slog.Warn("Active schema change job found",
+			"job_id", jobID,
+			"job_type", jobType,
+			"status", status,
+			"running_status", rs,
+			"description", description,
+			"created", created,
+			"modified", modified,
+		)
+		found = true
+	}
+	if !found {
+		slog.Info("No active schema change jobs found")
+	}
+}
+
+// logDatabaseInfo logs diagnostic information about the connected database.
+func logDatabaseInfo(ctx context.Context, pool *pgxpool.Pool) {
+	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var version string
+	if err := pool.QueryRow(queryCtx, "SELECT version()").Scan(&version); err != nil {
+		slog.Warn("Could not query database version", "error", err)
+	} else {
+		slog.Info("History database version", "version", version)
+	}
+
+	var dbName, currentUser string
+	if err := pool.QueryRow(queryCtx, "SELECT current_database(), current_user").Scan(&dbName, &currentUser); err != nil {
+		slog.Warn("Could not query connection info", "error", err)
+	} else {
+		slog.Info("History database connection", "database", dbName, "user", currentUser)
+	}
 }
 
 // initAndMigrate creates the migration tracking table, handles existing databases,
 // then runs any pending migrations.
 func initAndMigrate(ctx context.Context, pool *pgxpool.Pool) error {
-	_, err := pool.Exec(ctx, `
+	logDatabaseInfo(ctx, pool)
+
+	if err := execDDL(ctx, pool, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INT NOT NULL,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)
-	`)
-	if err != nil {
+	`); err != nil {
 		return fmt.Errorf("creating schema_migrations table: %w", err)
 	}
 

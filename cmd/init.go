@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -95,6 +96,12 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 		}
 	}
 
+	// Wait for any schema change jobs (e.g., from ALTER DEFAULT PRIVILEGES)
+	// to complete before returning, so the server's DDL won't contend.
+	if err := waitForSchemaChanges(ctx, conn); err != nil {
+		slog.Warn("Error waiting for schema changes", "error", err)
+	}
+
 	// Grant VIEWCLUSTERMETADATA to the source monitoring user (if specified)
 	if cfg.SourceUsername != "" {
 		sourceUserName := pgx.Identifier{cfg.SourceUsername}.Sanitize()
@@ -116,6 +123,50 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 	}
 
 	return nil
+}
+
+// waitForSchemaChanges polls until all active schema change jobs complete.
+func waitForSchemaChanges(ctx context.Context, conn *pgx.Conn) error {
+	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var count int
+	err := conn.QueryRow(queryCtx,
+		`SELECT count(*) FROM [SHOW JOBS]
+		 WHERE job_type = 'SCHEMA CHANGE'
+		   AND status NOT IN ('succeeded', 'canceled', 'failed')`).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("checking schema change jobs: %w", err)
+	}
+
+	if count == 0 {
+		return nil
+	}
+
+	slog.Info("Waiting for schema change jobs to complete", "count", count)
+	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer waitCancel()
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("timed out waiting for %d schema change jobs", count)
+		case <-time.After(2 * time.Second):
+		}
+
+		err := conn.QueryRow(waitCtx,
+			`SELECT count(*) FROM [SHOW JOBS]
+			 WHERE job_type = 'SCHEMA CHANGE'
+			   AND status NOT IN ('succeeded', 'canceled', 'failed')`).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("checking schema change jobs: %w", err)
+		}
+		if count == 0 {
+			slog.Info("All schema change jobs completed")
+			return nil
+		}
+		slog.Info("Still waiting for schema change jobs", "remaining", count)
+	}
 }
 
 // isInsecureMode checks if CockroachDB is running in insecure mode
