@@ -74,32 +74,10 @@ jobs:
 
       - name: Fresh migration smoke test
         run: |
-          # Build the binary and test that init + migration completes on a clean database.
-          # This catches DDL hang regressions — the timeout will kill a stuck migration.
-          go build -o crdb-cluster-history .
-
-          timeout 30 ./crdb-cluster-history init
-
-          # Verify all expected tables exist in the history database
-          for table in schema_migrations snapshots settings changes metadata annotations; do
-            result=$(docker exec cockroachdb-history cockroach sql --insecure \
-              --database=cluster_history -e \
-              "SELECT count(*) FROM information_schema.tables WHERE table_name = '$table'" \
-              --format=csv 2>/dev/null | tail -1)
-            if [ "$result" != "1" ]; then
-              echo "FAIL: table $table not found after migration"
-              exit 1
-            fi
-          done
-          echo "All tables created successfully"
-
-          # Clean up — drop the database so Go tests start fresh
-          docker exec cockroachdb-history cockroach sql --insecure -e \
-            "DROP DATABASE IF EXISTS cluster_history CASCADE"
-          docker exec cockroachdb-history cockroach sql --insecure -e \
-            "DROP USER IF EXISTS history_user"
-        env:
-          DATABASE_URL: postgresql://root@localhost:26258/defaultdb?sslmode=disable
+          # Run init + migration on a fresh database with a tight timeout.
+          # This catches DDL hang regressions — the test verifies init creates the
+          # database, storage.New() runs all migrations, and all tables exist.
+          go test -race -v -run TestFreshMigrationCompletes -count=1 -timeout 60s .
 
       - name: Run tests
         run: go test -p 1 -race -v -count=1 ./...

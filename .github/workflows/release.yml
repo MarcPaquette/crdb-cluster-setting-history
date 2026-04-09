@@ -43,27 +43,13 @@ jobs:
             fi
           done
 
-      - name: Build and test fresh migration
+      - name: Test fresh migration
         env:
           DATABASE_URL: postgresql://root@localhost:26257/defaultdb?sslmode=disable
         run: |
-          go build -o crdb-cluster-history .
-
-          # Init + migration must complete within 30 seconds (catches DDL hangs)
-          timeout 30 ./crdb-cluster-history init
-
-          # Verify all expected tables exist
-          for table in schema_migrations snapshots settings changes metadata annotations; do
-            result=$(docker exec cockroachdb-release-test cockroach sql --insecure \
-              --database=cluster_history -e \
-              "SELECT count(*) FROM information_schema.tables WHERE table_name = '$table'" \
-              --format=csv 2>/dev/null | tail -1)
-            if [ "$result" != "1" ]; then
-              echo "FAIL: table $table not found after migration"
-              exit 1
-            fi
-          done
-          echo "Fresh migration completed successfully — all tables verified"
+          # Run init + migration on a fresh database with a tight timeout.
+          # This catches DDL hang regressions before releasing binaries.
+          go test -race -v -run TestFreshMigrationCompletes -count=1 -timeout 60s .
 
       - name: CockroachDB logs on failure
         if: failure()
