@@ -227,6 +227,83 @@ func TestFreshMigrationCompletes(t *testing.T) {
 	t.Logf("Migration version: %d", maxVersion)
 }
 
+// TestInitCreatesTables verifies that RunInit creates all schema tables,
+// not just the database and user. The fleet-test script depends on this.
+func TestInitCreatesTables(t *testing.T) {
+	sourceURL := os.Getenv("DATABASE_URL")
+	if sourceURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	historyAdminURL := os.Getenv("HISTORY_ADMIN_URL")
+	if historyAdminURL == "" {
+		historyAdminURL = sourceURL
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	dbName := "cluster_history_init_tables_test"
+	username := "history_init_tables_user"
+
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		conn, err := pgx.Connect(cleanupCtx, historyAdminURL)
+		if err != nil {
+			return
+		}
+		defer conn.Close(cleanupCtx)
+		conn.Exec(cleanupCtx, "DROP DATABASE IF EXISTS "+pgx.Identifier{dbName}.Sanitize()+" CASCADE")
+		conn.Exec(cleanupCtx, "ALTER DEFAULT PRIVILEGES FOR ROLE root REVOKE ALL ON TABLES FROM "+pgx.Identifier{username}.Sanitize())
+		conn.Exec(cleanupCtx, "DROP USER IF EXISTS "+pgx.Identifier{username}.Sanitize())
+	})
+
+	if err := cmd.RunInit(ctx, cmd.InitConfig{
+		AdminURL:     historyAdminURL,
+		DatabaseName: dbName,
+		Username:     username,
+	}); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Verify tables exist WITHOUT calling storage.New — init alone should create them.
+	adminHistoryURL := replaceDBName(historyAdminURL, dbName)
+	conn, err := pgx.Connect(ctx, adminHistoryURL)
+	if err != nil {
+		t.Fatalf("Failed to connect to history DB: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	for _, table := range []string{"schema_migrations", "snapshots", "settings", "changes", "metadata", "annotations"} {
+		var exists bool
+		err := conn.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
+			table,
+		).Scan(&exists)
+		if err != nil {
+			t.Fatalf("Failed to check table %s: %v", table, err)
+		}
+		if !exists {
+			t.Errorf("Expected table %s to exist after init", table)
+		}
+	}
+}
+
+// replaceDBName builds a connection URL from an admin URL by replacing only
+// the database name, preserving the user, host, port, and query params.
+func replaceDBName(adminURL, dbName string) string {
+	const prefix = "postgresql://"
+	if !strings.HasPrefix(adminURL, prefix) {
+		return adminURL
+	}
+	rest := adminURL[len(prefix):]
+	atIdx := strings.Index(rest, "@")
+	if atIdx == -1 {
+		return adminURL
+	}
+	user := rest[:atIdx]
+	return replaceDBUserAndName(adminURL, user, dbName)
+}
+
 // replaceDBUserAndName builds a connection URL from an admin URL by replacing
 // the username and database name, preserving the host, port, and query params.
 func replaceDBUserAndName(adminURL, user, dbName string) string {

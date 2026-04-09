@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"time"
+
+	"crdb-cluster-history/storage"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -102,6 +105,16 @@ func RunInit(ctx context.Context, cfg InitConfig) error {
 		slog.Warn("Error waiting for schema changes", "error", err)
 	}
 
+	// Run schema migrations to create all tables.
+	historyURL, err := historyConnString(cfg.AdminURL, cfg.DatabaseName)
+	if err != nil {
+		return fmt.Errorf("building history database URL: %w", err)
+	}
+	slog.Info("Running schema migrations", "database", cfg.DatabaseName)
+	if err := storage.Migrate(ctx, historyURL); err != nil {
+		return fmt.Errorf("schema migration failed: %w", err)
+	}
+
 	// Grant VIEWCLUSTERMETADATA to the source monitoring user (if specified)
 	if cfg.SourceUsername != "" {
 		sourceUserName := pgx.Identifier{cfg.SourceUsername}.Sanitize()
@@ -167,6 +180,17 @@ func waitForSchemaChanges(ctx context.Context, conn *pgx.Conn) error {
 		}
 		slog.Info("Still waiting for schema change jobs", "remaining", count)
 	}
+}
+
+// historyConnString builds a connection URL for the history database by
+// replacing the database name in the admin URL.
+func historyConnString(adminURL, dbName string) (string, error) {
+	u, err := url.Parse(adminURL)
+	if err != nil {
+		return "", err
+	}
+	u.Path = "/" + dbName
+	return u.String(), nil
 }
 
 // isInsecureMode checks if CockroachDB is running in insecure mode
