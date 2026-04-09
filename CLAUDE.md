@@ -124,10 +124,12 @@ HISTORY_DATABASE_URL="postgresql://history_user@localhost:26257/cluster_history?
 **Endpoints:**
 - `/` - Main dashboard (changes table with search, download, cluster selector)
 - `/compare` - Side-by-side cluster comparison page
+- `/fleet` - Multi-cluster configuration drift analysis matrix
 - `/history` - Time-based snapshot comparison page
 - `/health` - Health check endpoint
 - `/export` - Download changes as zipped CSV
 - `/api/clusters` - List configured clusters (JSON)
+- `/api/cluster-settings` - Get current settings for a cluster (JSON)
 - `/api/compare` - Compare settings between clusters (JSON)
 - `/api/snapshots` - List snapshots for a cluster (JSON)
 - `/api/compare-snapshots` - Compare two snapshots (JSON)

@@ -82,6 +82,7 @@ The export includes the cluster ID from `crdb_internal.cluster_id()`.
 
 - **Multi-cluster monitoring**: Monitor multiple CockroachDB clusters from a single instance
 - **Side-by-side comparison**: Compare settings between clusters to identify differences
+- **Fleet drift analysis**: Multi-cluster configuration drift matrix showing which settings deviate from a baseline across your fleet, with auto or reference-cluster baselines
 - Periodically collects `SHOW CLUSTER SETTINGS` from CockroachDB clusters
 - Stores snapshots in a separate CockroachDB database for history
 - Detects and records changes (modified, added, removed settings)
@@ -188,6 +189,7 @@ Configuration is loaded in this order:
 When multiple clusters are configured:
 - A cluster selector dropdown appears in the UI
 - A "Compare Clusters" button allows side-by-side comparison
+- A "Fleet Comparison" page shows configuration drift across all clusters
 - Each cluster is collected independently
 
 ### Environment Variables (Single-Cluster Mode)
@@ -386,11 +388,13 @@ CREATE TABLE metadata (
 | `/` | GET | Main dashboard with changes table, search, and download button |
 | `/?cluster={id}` | GET | Dashboard filtered to specific cluster |
 | `/compare` | GET | Side-by-side cluster comparison page |
+| `/fleet` | GET | Multi-cluster configuration drift analysis matrix |
 | `/history` | GET | Time-based snapshot comparison page |
 | `/health` | GET | Health check endpoint (returns "ok" if database is accessible) |
 | `/export` | GET | Download changes as zipped CSV file |
 | `/export?cluster={id}` | GET | Download changes for specific cluster |
 | `/api/clusters` | GET | List configured clusters (JSON) |
+| `/api/cluster-settings?cluster={id}` | GET | Get current settings for a cluster (JSON, used by fleet page) |
 | `/api/compare?cluster1={id}&cluster2={id}` | GET | Compare settings between two clusters (JSON) |
 | `/api/snapshots?cluster={id}&limit={n}` | GET | List snapshots for a cluster (JSON) |
 | `/api/compare-snapshots?snapshot1={id}&snapshot2={id}` | GET | Compare two snapshots (JSON) |
