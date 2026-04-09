@@ -210,6 +210,26 @@ run_init() {
     exit 1
 }
 
+# === Migration Verification ===
+verify_migration() {
+    log_step "6b/7" "Verifying migration created all tables..."
+    local sql_port=$SQL_PORT_BASE
+    local expected_tables="schema_migrations snapshots settings changes metadata annotations"
+
+    for table in $expected_tables; do
+        local result
+        result=$($RUNTIME exec "${CONTAINER_PREFIX}-0" cockroach sql --insecure \
+            --database=cluster_history -e \
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = '$table'" \
+            --format=csv 2>/dev/null | tail -1)
+        if [ "$result" != "1" ]; then
+            log_error "Table $table not found after migration"
+            exit 1
+        fi
+    done
+    log_info "All tables verified: $expected_tables"
+}
+
 # === Server ===
 start_server() {
     log_step "7/7" "Starting server..."
@@ -248,6 +268,7 @@ main() {
             wait_for_clusters "$num_clusters"
             generate_config "$num_clusters"
             run_init
+            verify_migration
 
             echo ""
             echo "  Fleet comparison:  http://localhost:${APP_PORT}/fleet"

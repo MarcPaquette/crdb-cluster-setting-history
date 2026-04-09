@@ -72,6 +72,13 @@ jobs:
             ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO history_test_user;
           "
 
+      - name: Fresh migration smoke test
+        run: |
+          # Run init + migration on a fresh database with a tight timeout.
+          # This catches DDL hang regressions — the test verifies init creates the
+          # database, storage.New() runs all migrations, and all tables exist.
+          go test -race -v -run TestFreshMigrationCompletes -count=1 -timeout 60s .
+
       - name: Run tests
         run: go test -p 1 -race -v -count=1 ./...
 
