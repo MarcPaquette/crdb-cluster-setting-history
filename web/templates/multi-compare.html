@@ -558,12 +558,13 @@
 
         /* Cluster column headers - rotated */
         .cluster-col-header {
-            height: 160px;
+            height: 220px;
             width: 40px;
             min-width: 40px;
             max-width: 40px;
             padding: 6px 2px 4px 2px !important;
             vertical-align: bottom;
+            overflow: hidden;
         }
 
         .cluster-col-header-inner {
@@ -575,15 +576,15 @@
         .cluster-col-text {
             position: absolute;
             bottom: 0;
-            left: 50%;
+            left: 14px;
             transform-origin: bottom left;
-            transform: rotate(-55deg) translateX(-50%);
+            transform: rotate(-80deg);
             white-space: nowrap;
             font-size: 10px;
             font-family: var(--font-mono);
             font-weight: 400;
             color: var(--text-secondary);
-            max-width: 160px;
+            max-width: 215px;
             overflow: hidden;
             text-overflow: ellipsis;
             transition: color 0.1s;
@@ -717,6 +718,13 @@
         }
 
         .tip-value.diff-highlight { color: var(--cell-diff-text); }
+
+        .tip-description {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }
 
         .tip-divider {
             height: 1px;
@@ -1271,7 +1279,7 @@
                 for (var c = 0; c < state.selected.length; c++) {
                     var cid = state.selected[c];
                     var cell = row.cells[cid];
-                    html += '<td class="matrix-cell" data-cluster="' + esc(cid) + '" data-setting="' + esc(row.setting) + '" data-value="' + esc(cell.value || '') + '" data-baseline="' + esc(row.baselineValue || '') + '" data-status="' + cell.status + '" data-col-idx="' + (c + 1) + '">';
+                    html += '<td class="matrix-cell" data-cluster="' + esc(cid) + '" data-setting="' + esc(row.setting) + '" data-value="' + esc(cell.value || '') + '" data-baseline="' + esc(row.baselineValue || '') + '" data-status="' + cell.status + '" data-description="' + esc(row.description || '') + '" data-col-idx="' + (c + 1) + '">';
                     html += '<div class="cell-block ' + cell.status + '"></div>';
                     html += '</td>';
                 }
@@ -1398,11 +1406,15 @@
             var value = cell.dataset.value;
             var baseline = cell.dataset.baseline;
             var status = cell.dataset.status;
+            var description = cell.dataset.description;
 
             var html = '<div class="tip-label">Cluster</div>';
             html += '<div class="tip-value">' + esc(getClusterName(cluster)) + '</div>';
             html += '<div class="tip-label">Setting</div>';
             html += '<div class="tip-value">' + esc(setting) + '</div>';
+            if (description) {
+                html += '<div class="tip-description">' + esc(description) + '</div>';
+            }
             html += '<div class="tip-divider"></div>';
             html += '<div class="tip-label">Value</div>';
 
@@ -1419,23 +1431,28 @@
 
             dom.tooltip.innerHTML = html;
 
+            // Measure tooltip at its natural width off-screen first
+            dom.tooltip.style.left = '0px';
+            dom.tooltip.style.top = '-9999px';
+            dom.tooltip.style.transform = 'none';
+            dom.tooltip.classList.add('visible');
+            var tipRect = dom.tooltip.getBoundingClientRect();
+            var tipW = tipRect.width;
+            var tipH = tipRect.height;
+
             var rect = cell.getBoundingClientRect();
-            var tx = rect.left + rect.width / 2;
-            var ty = rect.top - 6;
+            var tx = rect.left + rect.width / 2 - tipW / 2;
+            var ty = rect.top - 6 - tipH;
+
+            // Keep on screen horizontally
+            if (tx < 8) tx = 8;
+            if (tx + tipW > window.innerWidth - 8) tx = window.innerWidth - 8 - tipW;
+
+            // Flip below cell if clipped at top
+            if (ty < 8) ty = rect.bottom + 6;
 
             dom.tooltip.style.left = tx + 'px';
             dom.tooltip.style.top = ty + 'px';
-            dom.tooltip.style.transform = 'translate(-50%, -100%)';
-
-            // Keep on screen
-            dom.tooltip.classList.add('visible');
-            var tipRect = dom.tooltip.getBoundingClientRect();
-            if (tipRect.left < 8) dom.tooltip.style.left = (8 + tipRect.width / 2) + 'px';
-            if (tipRect.right > window.innerWidth - 8) dom.tooltip.style.left = (window.innerWidth - 8 - tipRect.width / 2) + 'px';
-            if (tipRect.top < 8) {
-                dom.tooltip.style.top = (rect.bottom + 6) + 'px';
-                dom.tooltip.style.transform = 'translate(-50%, 0)';
-            }
         }
 
         function hideTooltip() {
@@ -1575,8 +1592,11 @@
         // === Init ===
         async function init() {
             state.allClusters = await loadClusters();
+            state.selected = state.allClusters.map(function(c) { return c.id; });
             renderPicker();
             updatePickerTrigger();
+            updateReferenceSelect();
+            loadAndRender();
         }
 
         init();

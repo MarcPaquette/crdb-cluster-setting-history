@@ -45,7 +45,8 @@ func SecurityHeaders(tlsEnabled bool) func(http.Handler) http.Handler {
 			w.Header().Set("Content-Security-Policy",
 				"default-src 'self'; "+
 					"script-src 'self' 'nonce-"+nonce+"'; "+
-					"style-src 'self' 'unsafe-inline'; "+
+					"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
+					"font-src 'self' https://fonts.gstatic.com; "+
 					"img-src 'self' data:; "+
 					"frame-ancestors 'none'")
 
