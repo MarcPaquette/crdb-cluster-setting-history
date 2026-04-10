@@ -10,6 +10,7 @@ import (
 
 	"crdb-cluster-history/cmd"
 	"crdb-cluster-history/collector"
+	"crdb-cluster-history/internal/testdbsuffix"
 	"crdb-cluster-history/storage"
 
 	"github.com/jackc/pgx/v5"
@@ -32,8 +33,9 @@ func TestFullIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	dbName := "cluster_history_integ_test"
-	username := "history_integ_user"
+	suffix := testdbsuffix.Suffix()
+	dbName := "cluster_history_integ_test" + suffix
+	username := "history_integ_user" + suffix
 
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -141,8 +143,9 @@ func TestFreshMigrationCompletes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dbName := "cluster_history_migration_test"
-	username := "history_migration_user"
+	suffix := testdbsuffix.Suffix()
+	dbName := "cluster_history_migration_test" + suffix
+	username := "history_migration_user" + suffix
 
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -241,8 +244,9 @@ func TestInitCreatesTables(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	dbName := "cluster_history_init_tables_test"
-	username := "history_init_tables_user"
+	suffix := testdbsuffix.Suffix()
+	dbName := "cluster_history_init_tables_test" + suffix
+	username := "history_init_tables_user" + suffix
 
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)

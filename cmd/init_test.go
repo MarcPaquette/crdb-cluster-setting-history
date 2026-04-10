@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"crdb-cluster-history/internal/testdbsuffix"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -40,8 +42,9 @@ func TestRunInitInsecureMode(t *testing.T) {
 	adminURL := getAdminURL(t)
 
 	timestamp := time.Now().Format("20060102150405")
-	dbName := "test_init_db_" + timestamp
-	userName := "test_init_user_" + timestamp
+	suffix := testdbsuffix.Suffix()
+	dbName := "test_init_db_" + timestamp + suffix
+	userName := "test_init_user_" + timestamp + suffix
 
 	cleanupInitResources(t, adminURL, dbName, userName)
 
@@ -95,8 +98,9 @@ func TestRunInitIdempotent(t *testing.T) {
 	adminURL := getAdminURL(t)
 
 	timestamp := time.Now().Format("20060102150405")
-	dbName := "test_idempotent_db_" + timestamp
-	userName := "test_idempotent_user_" + timestamp
+	suffix := testdbsuffix.Suffix()
+	dbName := "test_idempotent_db_" + timestamp + suffix
+	userName := "test_idempotent_user_" + timestamp + suffix
 
 	cleanupInitResources(t, adminURL, dbName, userName, userName)
 
@@ -126,8 +130,9 @@ func TestRunInitGrantsViewClusterMetadata(t *testing.T) {
 	adminURL := getAdminURL(t)
 
 	timestamp := time.Now().Format("20060102150405")
-	dbName := "test_grant_db_" + timestamp
-	userName := "test_grant_user_" + timestamp
+	suffix := testdbsuffix.Suffix()
+	dbName := "test_grant_db_" + timestamp + suffix
+	userName := "test_grant_user_" + timestamp + suffix
 
 	cleanupInitResources(t, adminURL, dbName, userName, userName)
 
@@ -170,8 +175,9 @@ func TestRunInitSkipsGrantWhenNoSourceUsername(t *testing.T) {
 	adminURL := getAdminURL(t)
 
 	timestamp := time.Now().Format("20060102150405")
-	dbName := "test_nogrant_db_" + timestamp
-	userName := "test_nogrant_user_" + timestamp
+	suffix := testdbsuffix.Suffix()
+	dbName := "test_nogrant_db_" + timestamp + suffix
+	userName := "test_nogrant_user_" + timestamp + suffix
 
 	cleanupInitResources(t, adminURL, dbName, userName)
 

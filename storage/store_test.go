@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"crdb-cluster-history/internal/testdbsuffix"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -33,8 +35,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	testDB := "cluster_history_test"
-	testUser := "history_test_user"
+	suffix := testdbsuffix.Suffix()
+	testDB := "cluster_history_test" + suffix
+	testUser := "history_test_user" + suffix
 
 	adminPool.Exec(ctx, fmt.Sprintf("CREATE USER IF NOT EXISTS %s", testUser))
 	adminPool.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s CASCADE", testDB))
